@@ -1,0 +1,437 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "aws_vpc.main",
+      "mode": "managed",
+      "type": "aws_vpc",
+      "name": "main",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "cidr_block": "10.0.0.0/16"
+        },
+        "after": {
+          "cidr_block": "10.0.0.0/16"
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "data.aws_caller_identity.current",
+      "mode": "data",
+      "type": "aws_caller_identity",
+      "name": "current",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "read"
+        ],
+        "before": null,
+        "after": {},
+        "after_unknown": {},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_security_group.bastion",
+      "mode": "managed",
+      "type": "aws_security_group",
+      "name": "bastion",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "name": "bastion",
+          "description": "Bastion access",
+          "vpc_id": "vpc-0a1b2c3d4e5f67890",
+          "ingress": [
+            {
+              "cidr_blocks": [
+                "0.0.0.0/0"
+              ],
+              "description": "SSH",
+              "from_port": 22,
+              "to_port": 22,
+              "protocol": "tcp",
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": [],
+              "self": false
+            },
+            {
+              "cidr_blocks": [
+                "0.0.0.0/0"
+              ],
+              "description": "HTTPS",
+              "from_port": 443,
+              "to_port": 443,
+              "protocol": "tcp",
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": [],
+              "self": false
+            }
+          ],
+          "tags": {
+            "Name": "bastion"
+          }
+        },
+        "after_unknown": {
+          "id": true,
+          "arn": true,
+          "ingress": [
+            {
+              "cidr_blocks": [
+                false
+              ],
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": []
+            },
+            {
+              "cidr_blocks": [
+                false
+              ],
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": []
+            }
+          ]
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_s3_bucket_public_access_block.site",
+      "mode": "managed",
+      "type": "aws_s3_bucket_public_access_block",
+      "name": "site",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "bucket": "example-site-bucket",
+          "block_public_acls": true,
+          "block_public_policy": true,
+          "ignore_public_acls": true,
+          "restrict_public_buckets": true
+        },
+        "after": {
+          "bucket": "example-site-bucket",
+          "block_public_acls": true,
+          "block_public_policy": false,
+          "ignore_public_acls": true,
+          "restrict_public_buckets": false
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_db_instance.app",
+      "mode": "managed",
+      "type": "aws_db_instance",
+      "name": "app",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete",
+          "create"
+        ],
+        "before": {
+          "identifier": "app-db",
+          "engine": "postgres",
+          "instance_class": "db.t4g.micro",
+          "publicly_accessible": false,
+          "storage_encrypted": true
+        },
+        "after": {
+          "identifier": "app-db-v2",
+          "engine": "postgres",
+          "instance_class": "db.t4g.micro",
+          "publicly_accessible": true,
+          "storage_encrypted": true
+        },
+        "after_unknown": {
+          "id": true,
+          "endpoint": true,
+          "address": true
+        },
+        "before_sensitive": {},
+        "after_sensitive": {},
+        "replace_paths": [
+          [
+            "identifier"
+          ]
+        ]
+      }
+    },
+    {
+      "address": "aws_iam_role.github_deploy",
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "github_deploy",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "name": "github-deploy",
+          "assume_role_policy": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Principal\": {\"Federated\": \"arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com\"}, \"Action\": \"sts:AssumeRoleWithWebIdentity\", \"Condition\": {\"StringEquals\": {\"token.actions.githubusercontent.com:aud\": \"sts.amazonaws.com\"}}}]}",
+          "max_session_duration": 3600
+        },
+        "after_unknown": {
+          "id": true,
+          "arn": true,
+          "unique_id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_iam_role_policy_attachment.deploy_admin",
+      "mode": "managed",
+      "type": "aws_iam_role_policy_attachment",
+      "name": "deploy_admin",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "role": "github-deploy",
+          "policy_arn": "arn:aws:iam::aws:policy/AdministratorAccess"
+        },
+        "after_unknown": {
+          "id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_instance.web",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "web",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "ami": "ami-0abcdef1234567890",
+          "instance_type": "t3.micro",
+          "metadata_options": [
+            {
+              "http_tokens": "required",
+              "http_endpoint": "enabled"
+            }
+          ],
+          "tags": {
+            "Name": "web"
+          }
+        },
+        "after": {
+          "ami": "ami-0abcdef1234567890",
+          "instance_type": "t3.small",
+          "metadata_options": [
+            {
+              "http_tokens": "optional",
+              "http_endpoint": "enabled"
+            }
+          ],
+          "tags": {
+            "Name": "web",
+            "Env": "lab"
+          }
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_cloudtrail.main",
+      "mode": "managed",
+      "type": "aws_cloudtrail",
+      "name": "main",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "name": "org-trail",
+          "is_multi_region_trail": true,
+          "enable_logging": true
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_s3_bucket.old_logs",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "old_logs",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "bucket": "example-old-logs",
+          "force_destroy": false
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_kms_key.logs",
+      "mode": "managed",
+      "type": "aws_kms_key",
+      "name": "logs",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "description": "log encryption",
+          "enable_key_rotation": false,
+          "customer_master_key_spec": "SYMMETRIC_DEFAULT",
+          "policy": null
+        },
+        "after_unknown": {
+          "arn": true,
+          "key_id": true,
+          "policy": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_lambda_function_url.hook",
+      "mode": "managed",
+      "type": "aws_lambda_function_url",
+      "name": "hook",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "function_name": "webhook",
+          "authorization_type": "NONE"
+        },
+        "after_unknown": {
+          "function_url": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_iam_access_key.ci",
+      "mode": "managed",
+      "type": "aws_iam_access_key",
+      "name": "ci",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "user": "ci-bot",
+          "status": "Active"
+        },
+        "after_unknown": {
+          "id": true,
+          "secret": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ],
+  "output_changes": {
+    "db_password": {
+      "actions": [
+        "create"
+      ],
+      "before": null,
+      "after": "hunter2",
+      "after_unknown": false,
+      "before_sensitive": false,
+      "after_sensitive": false
+    },
+    "bastion_sg_id": {
+      "actions": [
+        "create"
+      ],
+      "before": null,
+      "after_unknown": true,
+      "before_sensitive": false,
+      "after_sensitive": false
+    }
+  },
+  "resource_drift": [
+    {
+      "address": "aws_security_group.legacy",
+      "mode": "managed",
+      "type": "aws_security_group",
+      "name": "legacy",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "name": "legacy",
+          "tags": {
+            "Name": "legacy"
+          }
+        },
+        "after": {
+          "name": "legacy",
+          "tags": {
+            "Name": "legacy",
+            "Owner": "console-edit"
+          }
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

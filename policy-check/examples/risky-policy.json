@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Everything",
+      "Effect": "Allow",
+      "Action": [
+        "iam:*",
+        "ec2:RunInstances",
+        "lambda:CreateFunction"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PassAny",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "*"
+    },
+    {
+      "Sid": "Secrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "kms:Decrypt"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Logs",
+      "Effect": "Allow",
+      "Action": [
+        "cloudtrail:StopLogging",
+        "guardduty:DeleteDetector"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
