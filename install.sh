@@ -6,7 +6,13 @@ cd "$(dirname "$(readlink -f "$0")")"
 missing=()
 python3 -c 'import gi; gi.require_version("Gtk", "4.0")' 2>/dev/null || missing+=("GTK 4 for Python")
 python3 -c 'import boto3' 2>/dev/null || missing+=("boto3")
-if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+wsl=""
+if [[ -n "${WSL_DISTRO_NAME:-}" ]] || grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+  wsl=1
+fi
+if [[ -n "$wsl" ]] && { command -v clip.exe >/dev/null || [[ -x /mnt/c/Windows/System32/clip.exe ]]; }; then
+  :  # On WSL, copying goes straight to the Windows clipboard.
+elif [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
   command -v wl-copy >/dev/null || missing+=("wl-clipboard")
 elif [[ -n "${DISPLAY:-}" ]]; then
   command -v xclip >/dev/null || command -v xsel >/dev/null || missing+=("xclip")

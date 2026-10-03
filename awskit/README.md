@@ -35,6 +35,8 @@ sudo dnf install python3-boto3 python3-gobject gtk4 wl-clipboard
 
 PII Redact, Plan Check and Policy Check work offline and don't need boto3. Without GTK, everything still works from the terminal.
 
+On WSL, see [WSL](../README.md#wsl) in the main README for what works differently.
+
 The installer:
 
 - copies `awskit/` and the seven tool folders to `~/.local/share/awskit/`
@@ -319,6 +321,8 @@ They cover PII Redact against its sample file and its settings, the scan and tea
 | Scans are slow | Set `regions` in the settings to only the regions you use |
 | Copying doesn't stick after closing a window | Install `wl-clipboard` (Wayland) or `xclip` (X11) |
 | `pii-redact clip` says it can't reach the clipboard | Same, install `wl-clipboard` or `xclip` |
+| Crashes on start with `Couldn't open libGLESv2.so.2` | GTK couldn't set up the GPU. AWS Kit draws in software on WSL by itself, so this shouldn't happen there. Anywhere else, run `GSK_RENDERER=cairo awskit` or install the GLES library (Fedora: `libglvnd-gles`) |
+| On WSL, `pii-redact clip` can't read the Windows clipboard | PowerShell is missing or blocked. Install `wl-clipboard` so it can fall back to the WSLg clipboard |
 | Old window rules for PII Redact stopped matching | The app ID changed to `io.github.Snowblind019.AwsKit.Redact`, see [Keybinds](#keybinds) |
 | Terminals don't switch profile | Add the shell hook, see [profiles/](../profiles/) |
 | `awskit: command not found` | `~/.local/bin` isn't in your PATH. Fedora adds it by default for bash. |

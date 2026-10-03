@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 
 VERSION = "1.0.0"
@@ -439,6 +440,40 @@ def open_port_risk(protocol, from_port, to_port) -> tuple:
 
 # =================================================================== desktop
 
+@lru_cache(maxsize=None)
+def is_wsl() -> bool:
+    """True inside Windows Subsystem for Linux."""
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    try:
+        return "microsoft" in Path("/proc/sys/kernel/osrelease").read_text().lower()
+    except OSError:
+        return False
+
+
+def prepare_gtk_env():
+    """Runs before GTK loads. WSL usually has no GL or Vulkan driver GTK can use, and
+    GTK 4 aborts the whole app when its GL setup fails (Couldn't open libGLESv2.so.2).
+    The cairo renderer draws in software and needs neither. Setting GSK_RENDERER
+    yourself skips this, for example GSK_RENDERER=ngl awskit once GL works there."""
+    if is_wsl() and "GSK_RENDERER" not in os.environ:
+        os.environ["GSK_RENDERER"] = "cairo"
+        os.environ.setdefault("GDK_DISABLE", "gl,vulkan")
+
+
+def windows_tool(name: str):
+    """Find a Windows program from WSL, even when the Windows PATH isn't shared."""
+    found = shutil.which(name)
+    if found:
+        return found
+    for folder in ("/mnt/c/Windows/System32",
+                   "/mnt/c/Windows/System32/WindowsPowerShell/v1.0"):
+        path = os.path.join(folder, name)
+        if os.access(path, os.X_OK):
+            return path
+    return None
+
+
 class ClipboardError(Exception):
     pass
 
@@ -454,14 +489,28 @@ CLIP_WRITE = {
     "xsel": ["xsel", "--clipboard", "--input"],
 }
 
+# On WSL the Windows clipboard is used directly, since that's where you paste.
+# PowerShell is told to send UTF-8 so non-ASCII text isn't mangled.
+WINDOWS_READ_SCRIPT = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+                       "$t = Get-Clipboard -Raw; if ($t) { [Console]::Out.Write($t) }")
+
+
+def clip_backends() -> list:
+    """Clipboard tools that can be used here, best first."""
+    found = []
+    if is_wsl() and windows_tool("clip.exe"):
+        found.append("windows")
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy") and shutil.which("wl-paste"):
+        found.append("wayland")
+    if os.environ.get("DISPLAY"):
+        found += [tool for tool in ("xclip", "xsel") if shutil.which(tool)]
+    return found
+
 
 def clip_backend():
-    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy") and shutil.which("wl-paste"):
-        return "wayland"
-    if os.environ.get("DISPLAY"):
-        for tool in ("xclip", "xsel"):
-            if shutil.which(tool):
-                return tool
+    backends = clip_backends()
+    if backends:
+        return backends[0]
     if os.environ.get("WAYLAND_DISPLAY"):
         raise ClipboardError("Can't reach the clipboard. Install wl-clipboard "
                              "(Fedora: sudo dnf install wl-clipboard).")
@@ -469,8 +518,34 @@ def clip_backend():
                          "or xclip on X11.")
 
 
+def _read_windows():
+    """The Windows clipboard as text, or None if PowerShell can't be used here."""
+    ps = windows_tool("powershell.exe")
+    if not ps:
+        return None
+    try:
+        r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command", WINDOWS_READ_SCRIPT],
+                           capture_output=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return r.stdout.decode("utf-8", errors="replace").lstrip("\ufeff").replace("\r\n", "\n")
+
+
 def read_clipboard() -> str:
-    backend = clip_backend()
+    backends = clip_backends()
+    if backends[:1] == ["windows"]:
+        text = _read_windows()
+        if text is not None:
+            return text
+        # PowerShell is missing or blocked, so try wl-paste or xclip through WSLg.
+        backends = backends[1:]
+        if not backends:
+            raise ClipboardError("Couldn't read the Windows clipboard: powershell.exe is "
+                                 "missing or blocked. Installing wl-clipboard gives a "
+                                 "fallback through WSLg.")
+    backend = backends[0] if backends else clip_backend()
     try:
         r = subprocess.run(CLIP_READ[backend], capture_output=True, timeout=5)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -480,10 +555,17 @@ def read_clipboard() -> str:
 
 def write_clipboard(text: str):
     backend = clip_backend()
+    if backend == "windows":
+        # clip.exe only reads Unicode correctly as UTF-16 with a byte order mark,
+        # and Windows apps expect CRLF line endings.
+        cmd = [windows_tool("clip.exe")]
+        data = b"\xff\xfe" + text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-16-le")
+    else:
+        cmd = CLIP_WRITE[backend]
+        data = text.encode("utf-8")
     try:
-        subprocess.run(CLIP_WRITE[backend], input=text.encode("utf-8"),
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=5, check=True)
+        subprocess.run(cmd, input=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=10, check=True)
     except (OSError, subprocess.SubprocessError) as exc:
         raise ClipboardError(f"Couldn't write to the clipboard: {exc}") from exc
 

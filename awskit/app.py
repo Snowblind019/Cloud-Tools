@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import sys
 
+from .common import prepare_gtk_env
+
+# Has to happen before GTK loads, or GTK 4 can crash on WSL. See prepare_gtk_env.
+prepare_gtk_env()
+
 try:
     import gi
     gi.require_version("Gtk", "4.0")

@@ -51,6 +51,14 @@ Everything installs into your home folder: the `awskit` and `pii-redact` command
 
 If you had the standalone pii-redact installed before, your settings carry over and the old launcher entries are cleaned up.
 
+### WSL
+
+AWS Kit also runs on WSL2 with WSLg. Install the same packages inside the distro and run `./install.sh` as usual. A few things work differently there:
+
+- The windows draw in software instead of on the GPU. WSL usually doesn't have a GL driver GTK can use, and GTK 4 crashes on startup without one, so AWS Kit switches to software drawing by itself. To try the GPU anyway, run `GSK_RENDERER=ngl awskit`.
+- Copying goes straight to the Windows clipboard through `clip.exe`, and `pii-redact clip` reads it back with PowerShell, so you can copy in any Windows app, run it, and paste. wl-clipboard isn't needed, but it's used as a fallback if PowerShell is blocked.
+- Desktop notifications, like the one `pii-redact clip` shows and the scheduled Lab Sweep ones, usually don't show up in Windows. Set `sns_topic` in the settings to get sweep summaries through SNS instead. The schedule also only runs while WSL is running.
+
 ## Quick start
 
 | Command | What it does |
