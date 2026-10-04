@@ -2,9 +2,12 @@
 
 Run from the repo root:  python3 -m unittest discover -s tests -v
 Needs: pip install boto3 "moto[ec2,s3,iam,rds,sts]"
+The Image Redact tests need pycairo, and the end-to-end one also needs tesseract.
 """
+import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -278,6 +281,165 @@ class SweepAuditTests(unittest.TestCase):
         self.assertIn(("Unencrypted EBS volume", self.vol), checks)
         self.assertTrue(any(f.check == "Root user has no MFA" for f in findings))
         self.assertEqual(findings, sorted(findings, key=lambda f: audit.SEVERITY_ORDER[f.severity]))
+
+
+try:
+    import cairo
+    from awskit import imageredact
+except ImportError:  # pragma: no cover
+    cairo = imageredact = None
+
+
+def make_png(w, h, rgb=(1, 1, 1)):
+    surface = cairo.ImageSurface(cairo.FORMAT_RGB24, w, h)
+    cr = cairo.Context(surface)
+    cr.set_source_rgb(*rgb)
+    cr.paint()
+    buf = io.BytesIO()
+    surface.write_to_png(buf)
+    return buf.getvalue()
+
+
+def pixel(png, x, y):
+    s = cairo.ImageSurface.create_from_png(io.BytesIO(png))
+    s.flush()
+    data = s.get_data()
+    i = y * s.get_stride() + x * 4
+    return data[i + 2], data[i + 1], data[i]
+
+
+@unittest.skipIf(imageredact is None, "pycairo not installed")
+class ImageRedactTests(unittest.TestCase):
+    def word(self, text, left, top=10, height=14, line=1, cw=10):
+        chars = [(left + i * cw, left + (i + 1) * cw) for i in range(len(text))]
+        return imageredact.Word(text, left, top, len(text) * cw, height, 95, (0, line), chars)
+
+    def test_find_spans_matches_redact(self):
+        text = "arn:aws:iam::123456789012:user/jane.doe from 54.201.33.17"
+        spans = redact.find_spans(text, redact.Options())
+        out, counts, _ = redact.redact(text, redact.Options())
+        self.assertEqual(len(spans), sum(counts.values()))
+        self.assertEqual([text[s:e] for s, e, _ in spans],
+                         ["123456789012", "jane.doe", "54.201.33.17"])
+
+    def test_whole_word_box(self):
+        words = [self.word("Account:", 10), self.word("123456789012", 100)]
+        boxes = imageredact.find_boxes([words], redact.Options(), (400, 50))
+        self.assertEqual(len(boxes), 1)
+        x1, y1, x2, y2, label = boxes[0]
+        self.assertEqual(label, "AccountID")
+        self.assertLessEqual(x1, 100)
+        self.assertGreaterEqual(x2, 220)
+        self.assertGreater(x1, 90)  # "Account:" stays readable
+        self.assertLessEqual(y1, 10)
+        self.assertGreaterEqual(y2, 24)
+
+    def test_part_of_a_word_uses_character_boxes(self):
+        words = [self.word("arn:aws:iam::123456789012:user/jane", 0)]
+        boxes = imageredact.find_boxes([words], redact.Options(), (600, 50))
+        found = {b[4]: b for b in boxes}
+        acct = found["AccountID"]
+        self.assertLessEqual(acct[0], 130)
+        self.assertGreaterEqual(acct[2], 250)
+        self.assertGreaterEqual(acct[0], 110)  # "iam" stays readable
+        self.assertLessEqual(acct[2], 270)     # "user" stays readable
+        self.assertIn("IAMUser", found)
+
+    def test_ocr_mixups_are_fixed(self):
+        norm, index = imageredact.normalize('id = "1-0alb2c3d4e5f67890" acct 12345678901O')
+        self.assertIn("i-0a1b2c3d4e5f67890", norm)
+        self.assertIn("123456789010", norm)
+        norm, _ = imageredact.normalize("arn:aws:iam: :123456789012:user/x")
+        self.assertIn("iam::123456789012", norm)
+        norm, _ = imageredact.normalize("export AWS SECRET ACCESS KEY=abc")
+        self.assertIn("AWS_SECRET_ACCESS_KEY=", norm)
+        self.assertEqual(len(index), len(imageredact.normalize('id = "1-0alb2c3d4e5f67890" '
+                                                               'acct 12345678901O')[0]))
+
+    def test_flatten_paints_boxes_into_pixels(self):
+        png = make_png(100, 60)
+        box = imageredact.cover_shape([20, 10, 60, 30, "AccountID"], (0, 0, 0, 1), auto=True)
+        out = imageredact.encode(png, [box], ".png")
+        self.assertEqual(pixel(out, 40, 20), (0, 0, 0))
+        self.assertEqual(pixel(out, 80, 50), (255, 255, 255))
+        self.assertNotIn(b"tEXt", out)
+        self.assertNotIn(b"eXIf", out)
+        jpg = imageredact.encode(png, [box], ".jpg")
+        self.assertTrue(jpg.startswith(b"\xff\xd8"))
+
+    def test_names(self):
+        self.assertEqual(imageredact.default_name("/x/Screenshot 1.png"), "Screenshot 1-redacted.png")
+        self.assertEqual(imageredact.default_name("/x/photo.JPG"), "photo-redacted.jpg")
+        self.assertTrue(imageredact.default_name(None).startswith("redacted-"))
+        self.assertEqual(imageredact.clean_name("shared", ".png"), "shared.png")
+        self.assertEqual(imageredact.clean_name("a/b.jpg", ".png"), "a-b.jpg")
+        self.assertEqual(imageredact.clean_name("notes.v2", ".png"), "notes.v2.png")
+        with self.assertRaises(ValueError):
+            imageredact.clean_name("  ", ".png")
+
+    def test_rename_move_and_convert(self):
+        folder = tempfile.mkdtemp(prefix="awskit-img-")
+        try:
+            first = os.path.join(folder, "a.png")
+            imageredact.write_atomic(first, make_png(30, 20))
+            renamed = imageredact.relocate(first, os.path.join(folder, "b.png"))
+            self.assertFalse(os.path.exists(first))
+            moved = imageredact.relocate(renamed, os.path.join(folder, "sub", "b.png"))
+            self.assertTrue(os.path.exists(moved))
+            converted = imageredact.relocate(moved, os.path.join(folder, "sub", "b.jpg"))
+            with open(converted, "rb") as fh:
+                self.assertTrue(fh.read(2) == b"\xff\xd8")
+            self.assertFalse(os.path.exists(moved))
+        finally:
+            shutil.rmtree(folder)
+
+    def test_command_line_saves_a_file(self):
+        import subprocess
+        folder = tempfile.mkdtemp(prefix="awskit-img-")
+        try:
+            src = os.path.join(folder, "shot.png")
+            imageredact.write_atomic(src, make_png(40, 30))
+            env = dict(os.environ, PYTHONPATH=str(ROOT), PATH="/nonexistent")
+            r = subprocess.run([sys.executable, "-m", "awskit", "image", src, "-o", folder + "/"],
+                               capture_output=True, text=True, env=env, cwd=ROOT)
+            self.assertEqual(r.returncode, 1)          # no tesseract on that PATH
+            self.assertIn("tesseract", r.stderr)
+        finally:
+            shutil.rmtree(folder)
+
+    @unittest.skipUnless(shutil.which("tesseract"), "tesseract not installed")
+    def test_finds_and_covers_text_in_a_screenshot(self):
+        import gi
+        gi.require_version("Pango", "1.0")
+        gi.require_version("PangoCairo", "1.0")
+        from gi.repository import Pango, PangoCairo
+        text = 'Account: 123456789012\nOwner email: jane.doe@example.com\nRegion: us-west-2'
+        for bg, fg in (((1, 1, 1), (0.1, 0.1, 0.1)), ((0.1, 0.1, 0.12), (0.88, 0.88, 0.9))):
+            surface = cairo.ImageSurface(cairo.FORMAT_RGB24, 520, 110)
+            cr = cairo.Context(surface)
+            cr.set_source_rgb(*bg)
+            cr.paint()
+            layout = PangoCairo.create_layout(cr)
+            layout.set_font_description(Pango.FontDescription.from_string("DejaVu Sans Mono 11"))
+            layout.set_text(text, -1)
+            cr.set_source_rgb(*fg)
+            cr.move_to(12, 12)
+            PangoCairo.show_layout(cr, layout)
+            buf = io.BytesIO()
+            surface.write_to_png(buf)
+            boxes, _ = imageredact.detect(buf.getvalue())
+            labels = {b[4] for b in boxes}
+            self.assertIn("AccountID", labels)
+            self.assertIn("Email", labels)
+
+            def inside(sub):
+                start = text.index(sub)
+                pos = layout.index_to_pos(len(text[:start].encode()) + len(sub.encode()) // 2)
+                x, y = 12 + pos.x / Pango.SCALE, 12 + pos.y / Pango.SCALE + 6
+                return any(b[0] <= x <= b[2] and b[1] <= y <= b[3] for b in boxes)
+            self.assertTrue(inside("123456789012"))
+            self.assertTrue(inside("jane.doe@example.com"))
+            self.assertFalse(inside("us-west-2"))
 
 
 if __name__ == "__main__":

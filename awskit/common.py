@@ -14,12 +14,13 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.2.0"
 APP_NAME = "AWS Kit"
 APP_ID = "io.github.Snowblind019.AwsKit"
 PICKER_APP_ID = APP_ID + ".Profiles"
 REDACT_APP_ID = APP_ID + ".Redact"
 REDACT_SETTINGS_APP_ID = APP_ID + ".RedactSettings"
+IMAGE_APP_ID = APP_ID + ".ImageRedact"
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "awskit"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -568,6 +569,113 @@ def write_clipboard(text: str):
                        timeout=10, check=True)
     except (OSError, subprocess.SubprocessError) as exc:
         raise ClipboardError(f"Couldn't write to the clipboard: {exc}") from exc
+
+
+# ---- images on the clipboard, for Image Redact
+
+CLIP_IMAGE_READ = {
+    "wayland": ["wl-paste", "--type", "image/png"],
+    "xclip": ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+}
+CLIP_IMAGE_WRITE = {
+    "wayland": ["wl-copy", "--type", "image/png"],
+    "xclip": ["xclip", "-selection", "clipboard", "-t", "image/png", "-i"],
+}
+
+
+def _ps_quote(text: str) -> str:
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _windows_path(path: str):
+    try:
+        r = subprocess.run(["wslpath", "-w", path], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def _windows_image(script_for_path, read: bool, png: bytes = b""):
+    """Hand an image to or from the Windows clipboard through a temporary PNG file."""
+    import tempfile
+    ps = windows_tool("powershell.exe")
+    if not ps:
+        return None
+    folder = tempfile.mkdtemp(prefix="awskit-clip-")
+    path = os.path.join(folder, "clip.png")
+    try:
+        if not read:
+            with open(path, "wb") as fh:
+                fh.write(png)
+        win = _windows_path(path)
+        if not win:
+            return None
+        try:
+            r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-STA", "-Command",
+                                script_for_path(_ps_quote(win))],
+                               capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if r.returncode != 0:
+            return None
+        if not read:
+            return b"ok"
+        try:
+            with open(path, "rb") as fh:
+                return fh.read() or None
+        except OSError:
+            return b""  # PowerShell ran, but there was no image to save
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def read_clipboard_image():
+    """The clipboard image as PNG bytes, or None when there isn't one."""
+    backends = clip_backends()
+    if backends[:1] == ["windows"]:
+        data = _windows_image(lambda p: (
+            "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; "
+            "$i = [Windows.Forms.Clipboard]::GetImage(); "
+            f"if ($i) {{ $i.Save({p}, [Drawing.Imaging.ImageFormat]::Png) }}"), read=True)
+        if data is not None:
+            return data or None
+        backends = backends[1:]
+    for backend in backends:
+        cmd = CLIP_IMAGE_READ.get(backend)
+        if not cmd:
+            continue
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode == 0 and r.stdout.startswith(b"\x89PNG"):
+            return r.stdout
+    return None
+
+
+def write_clipboard_image(png: bytes):
+    """Put a PNG image on the clipboard, in a way that outlives the app that copied it."""
+    backends = clip_backends()
+    if backends[:1] == ["windows"]:
+        ok = _windows_image(lambda p: (
+            "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; "
+            f"$i = [Drawing.Image]::FromFile({p}); "
+            "[Windows.Forms.Clipboard]::SetImage($i); $i.Dispose()"), read=False, png=png)
+        if ok:
+            return
+        backends = backends[1:]
+    for backend in backends:
+        cmd = CLIP_IMAGE_WRITE.get(backend)
+        if not cmd:
+            continue
+        try:
+            subprocess.run(cmd, input=png, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=10, check=True)
+            return
+        except (OSError, subprocess.SubprocessError):
+            continue
+    raise ClipboardError("Can't put an image on the clipboard. Install wl-clipboard on Wayland "
+                         "or xclip on X11.")
 
 
 def have_pii_redact() -> bool:

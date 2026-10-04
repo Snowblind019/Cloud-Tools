@@ -10,12 +10,12 @@ import sys
 import threading
 from pathlib import Path
 
-from .common import (APP_ID, APP_NAME, PICKER_APP_ID, REDACT_APP_ID, REDACT_SETTINGS_APP_ID,
-                     SEVERITY_COLOR, SEVERITY_ORDER, VERSION,
+from .common import (APP_ID, APP_NAME, IMAGE_APP_ID, PICKER_APP_ID, REDACT_APP_ID,
+                     REDACT_SETTINGS_APP_ID, SEVERITY_COLOR, SEVERITY_ORDER, VERSION,
                      AuthError, ClipboardError, color, load_config, money, notify, parse_when,
                      pii_redact, table_text, to_markdown, write_clipboard)
 
-PAGES = ("redact", "sweep", "audit", "trail", "plan", "policy", "profiles")
+PAGES = ("redact", "image", "sweep", "audit", "trail", "plan", "policy", "profiles")
 
 
 def err(msg):
@@ -534,14 +534,16 @@ def desktop_entries(exe: str) -> dict:
     main = (
         "[Desktop Entry]\nType=Application\n"
         f"Name={APP_NAME}\nGenericName=AWS and Terraform tools\n"
-        "Comment=Redact output, lab sweep, exposure audit, CloudTrail, plan and policy checks\n"
+        "Comment=Redact output and screenshots, lab sweep, exposure audit, CloudTrail, plan and "
+        "policy checks\n"
         f"Exec=\"{exe}\" gui\nIcon=network-server\nTerminal=false\n"
         "Categories=Development;Utility;\n"
         "Keywords=aws;terraform;iam;cloudtrail;security;cost;redact;\n"
         f"StartupNotify=true\nStartupWMClass={APP_ID}\n"
-        "Actions=sweep;audit;trail;plan;policy;\n"
+        "Actions=image;sweep;audit;trail;plan;policy;\n"
     )
-    for page, title in (("sweep", "Lab Sweep"), ("audit", "Exposure Audit"),
+    for page, title in (("image", "Image Redact"), ("sweep", "Lab Sweep"),
+                        ("audit", "Exposure Audit"),
                         ("trail", "CloudTrail"), ("plan", "Plan Check"),
                         ("policy", "Policy Check")):
         main += f"\n[Desktop Action {page}]\nName={title}\nExec=\"{exe}\" gui {page}\n"
@@ -568,9 +570,22 @@ def desktop_entries(exe: str) -> dict:
         f"Exec=\"{exe}\" redact settings\nIcon=preferences-system\nTerminal=false\n"
         f"Categories=Settings;\nStartupWMClass={REDACT_SETTINGS_APP_ID}\n"
     )
+    image = (
+        "[Desktop Entry]\nType=Application\nName=Image Redact\nGenericName=Screenshot redaction\n"
+        "Comment=Cover account IDs, keys and personal info in screenshots\n"
+        f"Exec=\"{exe}\" image %f\nIcon=image-x-generic\nTerminal=false\n"
+        "Categories=Graphics;Utility;\n"
+        "MimeType=image/png;image/jpeg;image/webp;image/bmp;\n"
+        "Keywords=redact;screenshot;pii;aws;privacy;annotate;censor;\n"
+        f"StartupNotify=true\nStartupWMClass={IMAGE_APP_ID}\n"
+        "Actions=paste;clip;\n"
+        f"\n[Desktop Action paste]\nName=Open clipboard image\nExec=\"{exe}\" image clip -g\n"
+        f"\n[Desktop Action clip]\nName=Redact clipboard image\nExec=\"{exe}\" image clip\n"
+    )
     return {f"{APP_ID}.desktop": main, f"{PICKER_APP_ID}.desktop": picker,
             f"{REDACT_APP_ID}.desktop": redact,
-            f"{REDACT_SETTINGS_APP_ID}.desktop": redact_settings}
+            f"{REDACT_SETTINGS_APP_ID}.desktop": redact_settings,
+            f"{IMAGE_APP_ID}.desktop": image}
 
 
 def launcher_script(module_args: str, comment: str) -> str:
@@ -614,9 +629,13 @@ def cmd_install(args) -> int:
     old = remove_old_install(apps)
     for name, content in desktop_entries(str(exe)).items():
         (apps / name).write_text(content, encoding="utf-8")
+    if shutil.which("update-desktop-database"):
+        # So Image Redact shows up under Open With for images.
+        subprocess.run(["update-desktop-database", str(apps)], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, check=False)
     print(f"Installed {exe} and {shortcut}")
     print(f"Launcher entries added to {apps}: AWS Kit, AWS Profile Picker, PII Redact, "
-          "PII Redact Settings")
+          "PII Redact Settings, Image Redact")
     if old:
         print("Removed launcher entries from the old standalone PII Redact. Your PII Redact "
               "settings carry over.")
@@ -680,6 +699,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("redact", add_help=False,
                    help="Redact account IDs, keys and other identifying info (same as pii-redact)")
+    sub.add_parser("image", add_help=False,
+                   help="Cover account IDs, keys and other identifying text in screenshots")
 
     g = sub.add_parser("gui", help="Open the window")
     g.add_argument("page", nargs="?", choices=PAGES, help="Page to open on")
@@ -791,6 +812,9 @@ def main(argv=None) -> int:
         # PII Redact has its own command line, shared with the pii-redact command.
         from .redact import main as redact_main
         return redact_main(argv[1:], prog="awskit redact")
+    if argv[0] == "image":
+        from .imageredact import main as image_main
+        return image_main(argv[1:], prog="awskit image")
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "func", None):

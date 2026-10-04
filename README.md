@@ -2,9 +2,9 @@
 
 ![Cloud](https://img.shields.io/badge/Cloud-AWS-FF9900) ![IaC](https://img.shields.io/badge/IaC-Terraform-7B42BC) ![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![GTK](https://img.shields.io/badge/GTK-4-4A86CF) ![Platform](https://img.shields.io/badge/Platform-Linux-FCC624) [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 
-These are small tools I made for my own AWS and Terraform work on Fedora. Each one started from something that kept slowing me down while working on my [aws-platform](https://github.com/Snowblind019/aws-platform) projects and lab accounts: redacting output before asking for help, leftover resources costing money, chasing down AccessDenied errors, reading long Terraform plans, and keeping track of which AWS account I'm in.
+These are small tools I made for my own AWS and Terraform work on Fedora. Each one started from something that kept slowing me down while working on my [aws-platform](https://github.com/Snowblind019/aws-platform) projects and lab accounts: redacting output and screenshots before asking for help, leftover resources costing money, chasing down AccessDenied errors, reading long Terraform plans, and keeping track of which AWS account I'm in.
 
-They all live in one Linux app called **AWS Kit**: one GTK 4 window with a sidebar for the seven tools, plus commands for everything in the terminal.
+They all live in one Linux app called **AWS Kit**: one GTK 4 window with a sidebar for the eight tools, plus commands for everything in the terminal.
 
 ![AWS Kit open on the PII Redact page](pii-redact/docs/screenshot.png)
 
@@ -17,6 +17,7 @@ I built these with AI. I used Claude to help me brainstorm the ideas, plan how e
 | Tool | What it does | Why I made it |
 |---|---|---|
 | [**PII Redact**](pii-redact/) | Swaps account IDs, keys, ARNs, emails and other identifying info for `[Redacted]` in Terraform, AWS CLI or any other output | Redacting output by hand every time I needed help troubleshooting got tedious |
+| [**Image Redact**](image-redact/) | Reads the text in a screenshot and covers the same things with solid boxes, with drawing tools to fix it up, and rename and move built in | I was covering things in screenshots by hand in Gradia every time I shared one |
 | [**Lab Sweep**](lab-sweep/) | Finds anything still costing money in every region across your accounts, and tears it down after you confirm | Forgotten NAT gateways and Elastic IPs from labs keep billing, and the old lab accounts from my previous org needed cleaning up |
 | [**Exposure Audit**](exposure-audit/) | Looks for things open to the internet or missing basic protection, like open security groups, public buckets and snapshots, and IMDSv1 | I wanted a small scanner I wrote and understand, like a mini Prowler |
 | [**CloudTrail**](cloudtrail/) | Shows who did what and when from CloudTrail event history, and explains AccessDenied errors | Debugging permission errors in my own builds meant digging through raw CloudTrail events |
@@ -26,14 +27,14 @@ I built these with AI. I used Claude to help me brainstorm the ideas, plan how e
 
 Each tool's code and in-depth README live in its own folder. The parts they share, like the window, the commands and the installer, live in [awskit/](awskit/), which has its own README too.
 
-PII Redact is built into the others. Every **Copy redacted** button in AWS Kit runs text through it with your settings, so a CloudTrail event, an audit finding or a plan summary can be shared without leaking account details.
+PII Redact is built into the others. Every **Copy redacted** button in AWS Kit runs text through it with your settings, so a CloudTrail event, an audit finding or a plan summary can be shared without leaking account details. Image Redact uses the same rules and settings for screenshots.
 
 ## Install
 
 On Fedora:
 
 ```bash
-sudo dnf install python3-boto3 python3-gobject gtk4 wl-clipboard
+sudo dnf install python3-boto3 python3-gobject gtk4 wl-clipboard tesseract tesseract-langpack-eng
 git clone https://github.com/Snowblind019/cloud-tools.git
 cd cloud-tools
 ./install.sh
@@ -41,13 +42,13 @@ cd cloud-tools
 
 | Distro | Packages |
 |---|---|
-| Fedora | `python3-boto3 python3-gobject gtk4 wl-clipboard` |
-| Debian / Ubuntu | `python3-boto3 python3-gi gir1.2-gtk-4.0 wl-clipboard` |
-| Arch | `python-boto3 python-gobject gtk4 wl-clipboard` |
+| Fedora | `python3-boto3 python3-gobject gtk4 wl-clipboard tesseract tesseract-langpack-eng` |
+| Debian / Ubuntu | `python3-boto3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 wl-clipboard tesseract-ocr` |
+| Arch | `python-boto3 python-gobject python-cairo gtk4 wl-clipboard tesseract tesseract-data-eng` |
 
-On X11, use `xclip` instead of `wl-clipboard`. PII Redact, Plan Check and Policy Check don't need boto3.
+On X11, use `xclip` instead of `wl-clipboard`. PII Redact, Image Redact, Plan Check and Policy Check don't need boto3. Tesseract is only for Image Redact finding text by itself.
 
-Everything installs into your home folder: the `awskit` and `pii-redact` commands in `~/.local/bin`, and launcher entries for **AWS Kit**, **PII Redact**, **PII Redact Settings** and **AWS Profile Picker**. To update, run `git pull && ./install.sh`. To remove it all, run `awskit uninstall`.
+Everything installs into your home folder: the `awskit` and `pii-redact` commands in `~/.local/bin`, and launcher entries for **AWS Kit**, **PII Redact**, **PII Redact Settings**, **Image Redact** and **AWS Profile Picker**. Image Redact also shows up under Open With for images. To update, run `git pull && ./install.sh`. To remove it all, run `awskit uninstall`.
 
 If you had the standalone pii-redact installed before, your settings carry over and the old launcher entries are cleaned up.
 
@@ -57,6 +58,7 @@ AWS Kit also runs on WSL2 with WSLg. Install the same packages inside the distro
 
 - The windows draw in software instead of on the GPU. WSL usually doesn't have a GL driver GTK can use, and GTK 4 crashes on startup without one, so AWS Kit switches to software drawing by itself. To try the GPU anyway, run `GSK_RENDERER=ngl awskit`.
 - Copying goes straight to the Windows clipboard through `clip.exe`, and `pii-redact clip` reads it back with PowerShell, so you can copy in any Windows app, run it, and paste. wl-clipboard isn't needed, but it's used as a fallback if PowerShell is blocked.
+- Image Redact pastes and copies images through the Windows clipboard with PowerShell too, so a screenshot from Win+Shift+S pastes straight in, and the finished image pastes into any Windows app.
 - Desktop notifications, like the one `pii-redact clip` shows and the scheduled Lab Sweep ones, usually don't show up in Windows. Set `sns_topic` in the settings to get sweep summaries through SNS instead. The schedule also only runs while WSL is running.
 
 ## Quick start
@@ -66,6 +68,8 @@ AWS Kit also runs on WSL2 with WSLg. Install the same packages inside the distro
 | `awskit` | Open the AWS Kit window |
 | `pii-redact` | Open the small PII Redact paste window |
 | `pii-redact clip` | Redact whatever is on the clipboard, in place |
+| `awskit image` | Open Image Redact to cover things in a screenshot |
+| `awskit image shot.png -o out.png` | Cover what it finds in a screenshot, without a window |
 | `terraform plan \| pii-redact` | Redact command output in the terminal |
 | `awskit sweep` | List what's costing money in every region |
 | `awskit audit -v` | Run the exposure checks |
@@ -78,17 +82,18 @@ Each tool's README has the full details.
 
 ## Keybinds
 
-The quickest way to use these is from keybinds: one for the PII Redact paste window, one to redact the clipboard in place, one for the profile picker and one for the main window. [AWS Kit's README](awskit/README.md#keybinds) has them for Niri, Hyprland, Sway, i3, GNOME and KDE, with window rules so the small windows float.
+The quickest way to use these is from keybinds: one for the PII Redact paste window, one to redact the clipboard in place, one for Image Redact, one for the profile picker and one for the main window. [AWS Kit's README](awskit/README.md#keybinds) has them for Niri, Hyprland, Sway, i3, GNOME and KDE, with window rules so the small windows float.
 
 ## Repo layout
 
 ```text
 cloud-tools/
 ├── README.md            this file
-├── install.sh           installs AWS Kit with all seven tools
+├── install.sh           installs AWS Kit with all eight tools
 ├── LICENSE
 ├── awskit/              the shared app: window, commands, installer, keybinds
 ├── pii-redact/          redact account IDs, keys and personal info from output
+├── image-redact/        cover the same things in screenshots, with drawing tools
 ├── lab-sweep/           cost watchdog and teardown
 ├── exposure-audit/      public access and missing protection checks
 ├── cloudtrail/          who did what, from CloudTrail
@@ -100,7 +105,7 @@ cloud-tools/
 
 ## Status
 
-PII Redact gives the same output it did as a standalone tool, checked against its sample file. The AWS tools have been tested against [moto](https://github.com/getmoto/moto), which fakes AWS locally, and in the window with test data. That's what the screenshots show. They haven't been run against a real account yet, so do a dry run before the first real teardown.
+PII Redact gives the same output it did as a standalone tool, checked against its sample file. Image Redact has been tested on light and dark screenshots of that same sample, with tesseract 5, and in the window. Its clipboard on WSL hasn't been tried on a real Windows machine yet. The AWS tools have been tested against [moto](https://github.com/getmoto/moto), which fakes AWS locally, and in the window with test data. That's what the screenshots show. They haven't been run against a real account yet, so do a dry run before the first real teardown.
 
 To run the tests:
 

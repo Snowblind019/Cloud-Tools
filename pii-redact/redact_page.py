@@ -49,8 +49,8 @@ class RedactSettingsWindow(Gtk.Window):
         margins(body, 20)
         scroller.set_child(body)
         body.append(caption("Checked items get replaced. Changes save right away and apply to "
-                            "the PII Redact page, the paste window, clip mode, the terminal, and "
-                            "every Copy redacted button in AWS Kit."))
+                            "the PII Redact page, the paste window, clip mode, the terminal, "
+                            "Image Redact, and every Copy redacted button in AWS Kit."))
 
         for cat in redact.CATEGORIES:
             if cat.section not in self.sections:

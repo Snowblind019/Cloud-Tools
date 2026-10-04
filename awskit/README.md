@@ -1,12 +1,13 @@
 # AWS Kit
 
-The app that holds all seven tools in this repo. It gives them one window with a sidebar, one `awskit` command, one installer, and shared code for AWS sessions, tables, exporting, the clipboard and redaction.
+The app that holds all eight tools in this repo. It gives them one window with a sidebar, one `awskit` command, one installer, and shared code for AWS sessions, tables, exporting, the clipboard and redaction.
 
 ![The AWS Kit window on the PII Redact page](../pii-redact/docs/screenshot.png)
 
 | Tool | Page | Command | README |
 |---|---|---|---|
 | PII Redact | PII Redact | `pii-redact` or `awskit redact` | [pii-redact/](../pii-redact/) |
+| Image Redact | Image Redact | `awskit image` | [image-redact/](../image-redact/) |
 | Lab Sweep | Lab Sweep | `awskit sweep` | [lab-sweep/](../lab-sweep/) |
 | Exposure Audit | Exposure Audit | `awskit audit` | [exposure-audit/](../exposure-audit/) |
 | CloudTrail | CloudTrail | `awskit trail` | [cloudtrail/](../cloudtrail/) |
@@ -30,18 +31,19 @@ sudo dnf install python3-boto3 python3-gobject gtk4 wl-clipboard
 | The AWS tools | `python3-boto3` |
 | The windows | `python3-gobject gtk4` |
 | `pii-redact clip`, and copying that sticks around after a window closes on Niri, Hyprland and Sway | `wl-clipboard`, or `xclip` on X11 |
+| Image Redact finding text in screenshots | `tesseract tesseract-langpack-eng` |
 | SSO sign-in from the Profiles page | `awscli2` |
 | Plan Check running plans by itself | `terraform` or `tofu` |
 
-PII Redact, Plan Check and Policy Check work offline and don't need boto3. Without GTK, everything still works from the terminal.
+PII Redact, Image Redact, Plan Check and Policy Check work offline and don't need boto3. On Debian and Ubuntu, Image Redact also needs `python3-gi-cairo`. Without GTK, everything still works from the terminal.
 
 On WSL, see [WSL](../README.md#wsl) in the main README for what works differently.
 
 The installer:
 
-- copies `awskit/` and the seven tool folders to `~/.local/share/awskit/`
+- copies `awskit/` and the eight tool folders to `~/.local/share/awskit/`
 - writes two small launchers: `~/.local/bin/awskit`, and `~/.local/bin/pii-redact`, which is the same as `awskit redact`
-- adds four launcher entries: **AWS Kit** (right-click opens a tool directly), **AWS Profile Picker**, **PII Redact** (right-click has Redact clipboard and Settings), and **PII Redact Settings**
+- adds five launcher entries: **AWS Kit** (right-click opens a tool directly), **AWS Profile Picker**, **PII Redact** (right-click has Redact clipboard and Settings), **PII Redact Settings**, and **Image Redact** (right-click has Open clipboard image and Redact clipboard image), which also shows up under Open With for images
 - removes launcher entries left over from the standalone pii-redact, if you had it
 
 To update, `git pull` and run `./install.sh` again. To remove everything, run `awskit uninstall`. That leaves your settings in `~/.config/awskit/`, so delete that folder too if you want them gone.
@@ -50,7 +52,7 @@ To try it without installing, run `python3 -m awskit` from the root of the repo.
 
 ## The window
 
-Run `awskit` with no arguments, or open **AWS Kit** from your launcher. It opens on PII Redact, the tool you'll probably use most. `awskit gui audit` opens it on a certain page (redact, sweep, audit, trail, plan, policy or profiles). If the window is already open, it switches to that page instead of opening a second window.
+Run `awskit` with no arguments, or open **AWS Kit** from your launcher. It opens on PII Redact, the tool you'll probably use most. `awskit gui audit` opens it on a certain page (redact, image, sweep, audit, trail, plan, policy or profiles). If the window is already open, it switches to that page instead of opening a second window.
 
 Things that work the same on every page:
 
@@ -61,11 +63,11 @@ Things that work the same on every page:
 - **Status bar** at the bottom. It shows progress while a scan runs, and **Stop** cancels it after the calls already running finish.
 - **Export** saves the table as Markdown, CSV or JSON. The file name you pick decides the format.
 
-Keyboard: Ctrl+1 to Ctrl+7 switch pages, and Ctrl+Q quits. On the PII Redact page, Ctrl+Shift+C copies and Ctrl+, opens its settings.
+Keyboard: Ctrl+1 to Ctrl+8 switch pages, and Ctrl+Q quits. On the PII Redact page, Ctrl+Shift+C copies and Ctrl+, opens its settings. Image Redact has its own shortcuts, see [image-redact/](../image-redact/#the-editor).
 
 All AWS calls run in the background, so the window stays usable during a scan.
 
-Besides the main window, three small windows open on their own, which suits keybinds:
+Besides the main window, four windows open on their own, which suits keybinds:
 
 | Window | Opens with | App ID |
 |---|---|---|
@@ -73,6 +75,7 @@ Besides the main window, three small windows open on their own, which suits keyb
 | PII Redact paste window | `pii-redact` | `io.github.Snowblind019.AwsKit.Redact` |
 | PII Redact settings | `pii-redact settings` | `io.github.Snowblind019.AwsKit.RedactSettings` |
 | AWS profile picker | `awskit profile` or `awsp` | `io.github.Snowblind019.AwsKit.Profiles` |
+| Image Redact | `awskit image` | `io.github.Snowblind019.AwsKit.ImageRedact` |
 
 ## Keybinds
 
@@ -82,6 +85,7 @@ These cover the whole kit. Pick the ones you want and swap the keys for whatever
 |---|---|---|
 | Super+Alt+R | `pii-redact gui` | Open the PII Redact paste window |
 | Super+Alt+C | `pii-redact clip` | Redact the clipboard in place, with a notification |
+| Super+Alt+I | `awskit image clip -g` | Open the clipboard screenshot in Image Redact |
 | Super+Alt+A | `awskit profile` | Open the AWS profile picker |
 | Super+Alt+K | `awskit` | Open AWS Kit, or bring it to the front |
 
@@ -97,6 +101,7 @@ In `~/.config/niri/config.kdl`:
 binds {
     Mod+Alt+R { spawn-sh "~/.local/bin/pii-redact gui"; }
     Mod+Alt+C { spawn-sh "~/.local/bin/pii-redact clip"; }
+    Mod+Alt+I { spawn-sh "~/.local/bin/awskit image clip -g"; }
     Mod+Alt+A { spawn-sh "~/.local/bin/awskit profile"; }
     Mod+Alt+K { spawn-sh "~/.local/bin/awskit"; }
 }
@@ -128,6 +133,7 @@ In `~/.config/hypr/hyprland.lua`:
 ```lua
 hl.bind("SUPER + ALT + R", hl.dsp.exec_cmd("~/.local/bin/pii-redact gui"))
 hl.bind("SUPER + ALT + C", hl.dsp.exec_cmd("~/.local/bin/pii-redact clip"))
+hl.bind("SUPER + ALT + I", hl.dsp.exec_cmd("~/.local/bin/awskit image clip -g"))
 hl.bind("SUPER + ALT + A", hl.dsp.exec_cmd("~/.local/bin/awskit profile"))
 hl.bind("SUPER + ALT + K", hl.dsp.exec_cmd("~/.local/bin/awskit"))
 
@@ -146,6 +152,7 @@ hl.window_rule({
 ```ini
 bind = SUPER ALT, R, exec, ~/.local/bin/pii-redact gui
 bind = SUPER ALT, C, exec, ~/.local/bin/pii-redact clip
+bind = SUPER ALT, I, exec, ~/.local/bin/awskit image clip -g
 bind = SUPER ALT, A, exec, ~/.local/bin/awskit profile
 bind = SUPER ALT, K, exec, ~/.local/bin/awskit
 
@@ -163,6 +170,7 @@ In `~/.config/sway/config`:
 ```text
 bindsym $mod+Mod1+r exec ~/.local/bin/pii-redact gui
 bindsym $mod+Mod1+c exec ~/.local/bin/pii-redact clip
+bindsym $mod+Mod1+i exec ~/.local/bin/awskit image clip -g
 bindsym $mod+Mod1+a exec ~/.local/bin/awskit profile
 bindsym $mod+Mod1+k exec ~/.local/bin/awskit
 for_window [app_id="^io\.github\.Snowblind019\.AwsKit\.(Redact|RedactSettings|Profiles)$"] floating enable
@@ -175,6 +183,7 @@ In `~/.config/i3/config`. This needs `xclip` for clip mode.
 ```text
 bindsym $mod+Mod1+r exec --no-startup-id ~/.local/bin/pii-redact gui
 bindsym $mod+Mod1+c exec --no-startup-id ~/.local/bin/pii-redact clip
+bindsym $mod+Mod1+i exec --no-startup-id ~/.local/bin/awskit image clip -g
 bindsym $mod+Mod1+a exec --no-startup-id ~/.local/bin/awskit profile
 bindsym $mod+Mod1+k exec --no-startup-id ~/.local/bin/awskit
 for_window [title="^(PII Redact|PII Redact settings|AWS profile)$"] floating enable
@@ -185,7 +194,7 @@ for_window [title="^(PII Redact|PII Redact settings|AWS profile)$"] floating ena
 1. Go to Settings, then Keyboard, then View and Customize Shortcuts, then Custom Shortcuts, and press **+**.
 2. Give it a name, like **PII Redact**.
 3. For the command, use `sh -c "$HOME/.local/bin/pii-redact gui"`.
-4. Set the shortcut, then repeat for the others: `pii-redact clip`, `awskit profile` and `awskit`.
+4. Set the shortcut, then repeat for the others: `pii-redact clip`, `awskit image clip -g`, `awskit profile` and `awskit`.
 
 On GNOME Wayland, clip mode depends on wl-clipboard, which GNOME doesn't fully support, so it can be hit or miss. The paste window always works.
 
@@ -193,7 +202,7 @@ On GNOME Wayland, clip mode depends on wl-clipboard, which GNOME doesn't fully s
 
 1. Go to System Settings, then Keyboard, then Shortcuts, then Add New, then Command or Script.
 2. For the command, use `sh -c "$HOME/.local/bin/pii-redact gui"`.
-3. Set the shortcut, then repeat for `pii-redact clip`, `awskit profile` and `awskit`.
+3. Set the shortcut, then repeat for `pii-redact clip`, `awskit image clip -g`, `awskit profile` and `awskit`.
 
 ## Commands
 
@@ -202,6 +211,7 @@ On GNOME Wayland, clip mode depends on wl-clipboard, which GNOME doesn't fully s
 | `awskit` | Open the window |
 | `awskit gui [PAGE]` | Open the window on a page |
 | `pii-redact`, `awskit redact` | PII Redact, see [pii-redact/](../pii-redact/) |
+| `awskit image` | Image Redact, see [image-redact/](../image-redact/) |
 | `awskit sweep` | Lab Sweep, see [lab-sweep/](../lab-sweep/) |
 | `awskit audit` | Exposure Audit, see [exposure-audit/](../exposure-audit/) |
 | `awskit trail` | CloudTrail lookups, see [cloudtrail/](../cloudtrail/) |
@@ -238,13 +248,14 @@ It never stores credentials. For each scan, it reads the profile's credentials o
 
 When an SSO sign-in has expired, you get a plain message with the command to fix it, like `Sign-in for profile lab-admin has expired. Run: aws sso login --profile lab-admin`. On the Profiles page, **Sign in** does that for you.
 
-AWS Kit only talks to AWS APIs. PII Redact doesn't talk to anything. There's no telemetry and nothing else leaves your machine.
+AWS Kit only talks to AWS APIs. PII Redact and Image Redact don't talk to anything. There's no telemetry and nothing else leaves your machine.
 
 ## Permissions
 
 | Tool | What it needs |
 |---|---|
 | PII Redact | Nothing. It never calls AWS. |
+| Image Redact | Nothing. It never calls AWS. |
 | Lab Sweep scan | Read access. `SecurityAudit` covers almost all of it, plus `ce:GetCostAndUsage` for the spend button. |
 | Lab Sweep teardown | Delete permissions for whatever you tick. In a lab account that's usually an admin role. |
 | Exposure Audit | `SecurityAudit` |
@@ -262,7 +273,8 @@ Everything lives in `~/.config/awskit/`:
 | File | What's in it |
 |---|---|
 | `config.json` | Lab Sweep and Exposure Audit settings, below. Lab Sweep's **Settings** button edits it. |
-| `redact.json` | PII Redact's settings. Its **Settings** window edits it. See [pii-redact/](../pii-redact/). |
+| `redact.json` | PII Redact's settings. Its **Settings** window edits it. Image Redact uses them too. See [pii-redact/](../pii-redact/). |
+| `image.json` | Image Redact's colors, widths and recent folders. The editor saves it as you go. See [image-redact/](../image-redact/). |
 | `current-profile` | The profile picked in Profiles. See [profiles/](../profiles/). |
 
 `config.json`:
@@ -308,7 +320,7 @@ pip install --user moto
 python3 -m unittest discover -s tests -v
 ```
 
-They cover PII Redact against its sample file and its settings, the scan and teardown logic against fake EC2, EBS, KMS, Secrets Manager and S3 resources, the audit checks, the plan and policy rules against the files in each tool's `examples/` folder, and profile parsing.
+They cover PII Redact against its sample file and its settings, Image Redact's box placement, OCR cleanup, saving, renaming and moving (plus reading a real rendered screenshot when tesseract is installed), the scan and teardown logic against fake EC2, EBS, KMS, Secrets Manager and S3 resources, the audit checks, the plan and policy rules against the files in each tool's `examples/` folder, and profile parsing.
 
 ## Troubleshooting
 
@@ -321,6 +333,8 @@ They cover PII Redact against its sample file and its settings, the scan and tea
 | Scans are slow | Set `regions` in the settings to only the regions you use |
 | Copying doesn't stick after closing a window | Install `wl-clipboard` (Wayland) or `xclip` (X11) |
 | `pii-redact clip` says it can't reach the clipboard | Same, install `wl-clipboard` or `xclip` |
+| Image Redact says it needs tesseract | `sudo dnf install tesseract tesseract-langpack-eng`. Drawing by hand works without it. |
+| Image Redact crashes with `Couldn't find foreign struct converter for 'cairo.Context'` | Debian/Ubuntu: `sudo apt install python3-gi-cairo` |
 | Crashes on start with `Couldn't open libGLESv2.so.2` | GTK couldn't set up the GPU. AWS Kit draws in software on WSL by itself, so this shouldn't happen there. Anywhere else, run `GSK_RENDERER=cairo awskit` or install the GLES library (Fedora: `libglvnd-gles`) |
 | On WSL, `pii-redact clip` can't read the Windows clipboard | PowerShell is missing or blocked. Install `wl-clipboard` so it can fall back to the WSLg clipboard |
 | Old window rules for PII Redact stopped matching | The app ID changed to `io.github.Snowblind019.AwsKit.Redact`, see [Keybinds](#keybinds) |

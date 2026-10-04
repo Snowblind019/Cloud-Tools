@@ -18,7 +18,7 @@ Part of [AWS Kit](../awskit/). The screenshots use the fake data in `examples/sa
 - **Knows what to leave alone.** Regions, private IPs, CIDR blocks, Terraform references, version numbers and commit hashes stay, so the output still makes sense.
 - **Strips terminal color codes** before redacting, so colored Terraform output doesn't hide values.
 - **Keeps the clipboard after closing** on Niri, Hyprland, Sway and X11, where the clipboard normally empties when the app that copied closes.
-- **Built into the other tools.** Every **Copy redacted** button in AWS Kit, and `awskit plan --redact`, uses PII Redact with your settings. So a CloudTrail event, an audit finding or a plan summary can be shared in one click.
+- **Built into the other tools.** Every **Copy redacted** button in AWS Kit, and `awskit plan --redact`, uses PII Redact with your settings. So a CloudTrail event, an audit finding or a plan summary can be shared in one click. [Image Redact](../image-redact/) uses the same rules and settings to cover things in screenshots.
 - **Local only.** No network calls, nothing leaves your machine.
 
 ![The small paste window, opened with pii-redact or a keybind](docs/main-window.png)

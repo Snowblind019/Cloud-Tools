@@ -368,9 +368,12 @@ class Options:
     never: list = field(default_factory=list)
 
 
-def redact(text: str, opts: Options):
-    """Return (redacted_text, Counter of labels, list of (start, end) placeholder offsets)."""
-    text = ANSI_RE.sub("", text)
+def find_spans(text: str, opts: Options) -> list:
+    """Where redactions go in text, as (start, end, label), without changing anything.
+
+    Image Redact uses this on text read from screenshots, so both tools find the same
+    things with the same settings.
+    """
     rules = list(RULES)
     custom = word_regex(opts.always)
     if custom:
@@ -409,6 +412,13 @@ def redact(text: str, opts: Options):
         if s >= last_end:
             chosen.append((s, e, label))
             last_end = e
+    return chosen
+
+
+def redact(text: str, opts: Options):
+    """Return (redacted_text, Counter of labels, list of (start, end) placeholder offsets)."""
+    text = ANSI_RE.sub("", text)
+    chosen = find_spans(text, opts)
 
     out, ranges, counts = [], [], Counter()
     numbers, per_label = {}, Counter()

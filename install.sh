@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Installs AWS Kit, with all seven tools, for your user. No sudo needed for this part.
+# Installs AWS Kit, with all eight tools, for your user. No sudo needed for this part.
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 
 missing=()
 python3 -c 'import gi; gi.require_version("Gtk", "4.0")' 2>/dev/null || missing+=("GTK 4 for Python")
+python3 -c 'import gi; gi.require_foreign("cairo")' 2>/dev/null || missing+=("cairo for Python")
 python3 -c 'import boto3' 2>/dev/null || missing+=("boto3")
 wsl=""
 if [[ -n "${WSL_DISTRO_NAME:-}" ]] || grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
@@ -21,14 +22,14 @@ fi
 if (( ${#missing[@]} )); then
   echo "Missing: ${missing[*]}"
   echo
-  echo "  Fedora:        sudo dnf install python3-boto3 python3-gobject gtk4 wl-clipboard"
-  echo "  Debian/Ubuntu: sudo apt install python3-boto3 python3-gi gir1.2-gtk-4.0 wl-clipboard"
-  echo "  Arch:          sudo pacman -S python-boto3 python-gobject gtk4 wl-clipboard"
+  echo "  Fedora:        sudo dnf install python3-boto3 python3-gobject gtk4 wl-clipboard tesseract tesseract-langpack-eng"
+  echo "  Debian/Ubuntu: sudo apt install python3-boto3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 wl-clipboard tesseract-ocr"
+  echo "  Arch:          sudo pacman -S python-boto3 python-gobject python-cairo gtk4 wl-clipboard tesseract tesseract-data-eng"
   echo "  On X11, use xclip instead of wl-clipboard."
   echo
   echo "Without GTK, everything still works from the terminal. Without boto3, PII Redact,"
-  echo "Plan Check and Policy Check still work. The clipboard tool is for pii-redact clip"
-  echo "and copying that sticks around after a window closes."
+  echo "Image Redact, Plan Check and Policy Check still work. The clipboard tool is for"
+  echo "pii-redact clip and copying that sticks around after a window closes."
   read -rp "Install anyway? [y/N] " answer
   [[ "${answer,,}" == y* ]] || exit 1
 fi
@@ -36,5 +37,7 @@ fi
 command -v aws >/dev/null || echo "Note: the AWS CLI is needed for SSO sign-in from the Profiles page (Fedora: sudo dnf install awscli2)."
 command -v terraform >/dev/null || command -v tofu >/dev/null || \
   echo "Note: Plan Check can only run plans itself if terraform or tofu is installed."
+command -v tesseract >/dev/null || \
+  echo "Note: Image Redact needs tesseract to find text in screenshots (Fedora: sudo dnf install tesseract tesseract-langpack-eng). Drawing boxes by hand works without it."
 
 python3 -m awskit install

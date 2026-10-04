@@ -1,5 +1,6 @@
 """AWS Kit's windows: the main window with a sidebar of tools, plus the small profile
-picker, PII Redact paste window and PII Redact settings window for keybinds."""
+picker, PII Redact paste window, PII Redact settings window and Image Redact window for
+keybinds."""
 from __future__ import annotations
 
 import sys
@@ -21,9 +22,10 @@ except (ImportError, ValueError) as exc:
              "Every tool also works from the terminal: awskit --help")
 
 from . import profiles  # noqa: E402
-from .common import (APP_ID, APP_NAME, CURRENT_PROFILE_FILE, PICKER_APP_ID,  # noqa: E402
-                     REDACT_APP_ID, REDACT_SETTINGS_APP_ID, VERSION)
+from .common import (APP_ID, APP_NAME, CURRENT_PROFILE_FILE, IMAGE_APP_ID,  # noqa: E402
+                     PICKER_APP_ID, REDACT_APP_ID, REDACT_SETTINGS_APP_ID, VERSION)
 from .audit_page import AuditPage  # noqa: E402
+from .image_page import ImagePage, ImageWindow  # noqa: E402
 from .plan_page import PlanPage  # noqa: E402
 from .policy_page import PolicyPage  # noqa: E402
 from .profiles_page import PickerWindow, ProfilesPage  # noqa: E402
@@ -32,12 +34,13 @@ from .sweep_page import SweepPage  # noqa: E402
 from .trail_page import TrailPage  # noqa: E402
 from .widgets import button, clear_box, hbox, install_css, label, margins, vbox  # noqa: E402
 
-PAGE_CLASSES = [RedactPage, SweepPage, AuditPage, TrailPage, PlanPage, PolicyPage, ProfilesPage]
+PAGE_CLASSES = [RedactPage, ImagePage, SweepPage, AuditPage, TrailPage, PlanPage, PolicyPage,
+                ProfilesPage]
 PAGES = [cls.name for cls in PAGE_CLASSES]
 
 # Small windows that open on their own, for keybinds and launcher entries.
 MODES = {"picker": PICKER_APP_ID, "redact-window": REDACT_APP_ID,
-         "redact-settings": REDACT_SETTINGS_APP_ID}
+         "redact-settings": REDACT_SETTINGS_APP_ID, "image-window": IMAGE_APP_ID}
 
 
 class MainWindow(Gtk.ApplicationWindow):
@@ -59,7 +62,7 @@ class MainWindow(Gtk.ApplicationWindow):
         about_box = vbox(4)
         margins(about_box, 10)
         about_box.append(label(f"{APP_NAME} {VERSION}", "heading"))
-        about_box.append(label("Ctrl+1 to Ctrl+7 switch pages.\nEvery tool also runs in the "
+        about_box.append(label(f"Ctrl+1 to Ctrl+{len(PAGE_CLASSES)} switch pages.\nEvery tool also runs in the "
                                "terminal: awskit --help", "dim-label"))
         about_pop.set_child(about_box)
         about.set_popover(about_pop)
@@ -169,18 +172,22 @@ class MainWindow(Gtk.ApplicationWindow):
 
 
 class App(Gtk.Application):
-    def __init__(self, page=None, initial_text=None):
+    def __init__(self, page=None, initial_text=None, initial_file=None, paste=False):
         flags = getattr(Gio.ApplicationFlags, "DEFAULT_FLAGS", Gio.ApplicationFlags.FLAGS_NONE)
-        if initial_text is not None:
+        if initial_text is not None or initial_file or paste:
             flags |= Gio.ApplicationFlags.NON_UNIQUE  # pre-filled windows always open fresh
         super().__init__(application_id=MODES.get(page, APP_ID), flags=flags)
         self.page = page
         self.initial_text = initial_text
+        self.initial_file = initial_file
+        self.paste = paste
         action = Gio.SimpleAction.new("show-page", GLib.VariantType.new("s"))
         action.connect("activate", self._show_page)
         self.add_action(action)
         quit_action = Gio.SimpleAction.new("quit", None)
-        quit_action.connect("activate", lambda *_: self.quit())
+        # Closing each window instead of quitting outright lets Image Redact ask about
+        # unsaved changes first.
+        quit_action.connect("activate", lambda *_: [w.close() for w in list(self.get_windows())])
         self.add_action(quit_action)
         self.set_accels_for_action("app.quit", ["<Control>q"])
 
@@ -197,6 +204,8 @@ class App(Gtk.Application):
                 win = RedactWindow(self, self.initial_text)
             elif self.page == "redact-settings":
                 win = RedactSettingsWindow(application=self)
+            elif self.page == "image-window":
+                win = ImageWindow(self, self.initial_file, self.paste)
             else:
                 win = MainWindow(self, self.page)
         win.present()
@@ -207,8 +216,8 @@ class App(Gtk.Application):
             win.show_page(value.get_string())
 
 
-def main(page=None, initial_text=None) -> int:
-    app = App(page, initial_text)
+def main(page=None, initial_text=None, initial_file=None, paste=False) -> int:
+    app = App(page, initial_text, initial_file, paste)
     try:
         app.register(None)
     except GLib.Error:
