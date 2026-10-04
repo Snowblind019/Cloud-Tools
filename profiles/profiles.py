@@ -268,10 +268,56 @@ __awskit_sync
 '''
 
 
+POWERSHELL_HOOK = r'''# awskit shell integration for PowerShell, on Windows or anywhere else.
+# Keeps AWS_PROFILE in step with the profile picked in awskit (window or awsp).
+function global:__awskit_sync {
+    $base = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME }
+            elseif ($env:APPDATA) { $env:APPDATA }
+            else { Join-Path $HOME '.config' }
+    $f = Join-Path (Join-Path $base 'awskit') 'current-profile'
+    if (-not (Test-Path -LiteralPath $f)) { return }
+    $p = "$(Get-Content -LiteralPath $f -Raw -ErrorAction SilentlyContinue)".Trim()
+    if ($p -ne $global:__awskit_last) {
+        $global:__awskit_last = $p
+        if ($p) { $env:AWS_PROFILE = $p } else { Remove-Item Env:AWS_PROFILE -ErrorAction SilentlyContinue }
+    }
+}
+# Returns "(aws:name) " when a profile is active, for your own prompt function.
+function global:__awskit_ps1 { if ($env:AWS_PROFILE) { "(aws:$env:AWS_PROFILE) " } }
+# awsp            open the picker window
+# awsp NAME       switch to NAME
+# awsp --clear    go back to no profile
+function global:awsp { awskit profile @args; if ($LASTEXITCODE -eq 0) { __awskit_sync } }
+if (-not $global:__awskit_hooked) {
+    $global:__awskit_hooked = $true
+    $global:__awskit_prompt = $function:prompt
+    function global:prompt { __awskit_sync; & $global:__awskit_prompt }
+}
+__awskit_sync
+'''
+
+SHELLS = ("bash", "zsh", "fish", "powershell")
+
+
+def default_shell() -> str:
+    return "powershell" if os.name == "nt" else "bash"
+
+
 def shell_hook(shell: str) -> str:
-    shell = (shell or "bash").lower()
+    shell = (shell or default_shell()).lower()
     if shell == "fish":
         return FISH_HOOK
     if shell in ("bash", "zsh", "sh"):
         return BASH_HOOK
-    raise ValueError("Supported shells: bash, zsh, fish")
+    if shell in ("powershell", "pwsh"):
+        return POWERSHELL_HOOK
+    raise ValueError("Supported shells: bash, zsh, fish, powershell")
+
+
+def shell_setup(shell: str) -> tuple:
+    """(line to add, file to add it to) for a shell."""
+    if shell == "fish":
+        return "awskit shell-init fish | source", "~/.config/fish/config.fish"
+    if shell in ("powershell", "pwsh"):
+        return "awskit shell-init powershell | Out-String | Invoke-Expression", "$PROFILE"
+    return f'eval "$(awskit shell-init {shell})"', {"zsh": "~/.zshrc"}.get(shell, "~/.bashrc")

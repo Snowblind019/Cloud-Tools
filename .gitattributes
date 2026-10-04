@@ -1,0 +1,5 @@
+# Windows scripts need Windows line endings, even when checked out on Linux.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.ico binary
+*.png binary

@@ -1,32 +1,17 @@
-"""Image Redact in the window: the editor, its page in AWS Kit, and its own small window."""
+"""Image Redact in the window on Linux: the GTK editor, its page in AWS Kit, and its own
+small window. The editing itself lives in imageedit.py, shared with the Windows window."""
 from __future__ import annotations
 
-import copy
-import math
 import os
 
-import cairo
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 
+from . import imageedit as ie
 from . import imageredact as ir
 from .common import ClipboardError, is_wsl, read_clipboard_image, write_clipboard_image
 from .widgets import Page, button, hbox, label, margins, run_bg, show_message, vbox
 
-PAD = 24
-ZOOMS = [0.1, 0.17, 0.25, 0.33, 0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0]
-HANDLE = 5
-
-# (id, name, shortcut key, tooltip)
-TOOLS = [
-    ("select", "Select", "v", "Select, move and resize (V). Delete removes, arrow keys nudge."),
-    ("cover", "Cover", "c", "Cover with a solid box (C). Same as what text detection draws."),
-    ("rect", "Box", "r", "Box outline, or filled with Fill on (R)"),
-    ("oval", "Oval", "o", "Oval (O)"),
-    ("line", "Line", "l", "Line (L). Hold Shift for straight angles."),
-    ("arrow", "Arrow", "a", "Arrow (A). Hold Shift for straight angles."),
-    ("pen", "Pen", "p", "Draw freehand (P)"),
-    ("text", "Text", "t", "Text (T). Click where it goes, type, then press Enter."),
-]
+PAD = ie.PAD
 
 
 def fg_color(widget):
@@ -58,104 +43,7 @@ class ToolIcon(Gtk.DrawingArea):
 
     def _draw(self, area, cr, w, h):
         c = fg_color(self)
-        cr.set_source_rgba(c.red, c.green, c.blue, c.alpha)
-        cr.set_line_width(1.6)
-        cr.set_line_cap(cairo.LINE_CAP_ROUND)
-        cr.set_line_join(cairo.LINE_JOIN_ROUND)
-        cr.scale(w / 18, h / 18)
-        k = self.kind
-        if k == "select":
-            for x, y in ((5, 2.5), (5, 15), (8.2, 12), (10.4, 16.4), (12.4, 15.5), (10.3, 11.1),
-                         (14.6, 11.1)):
-                cr.line_to(x, y)
-            cr.close_path()
-            cr.fill()
-        elif k == "cover":
-            cr.rectangle(2.5, 5, 13, 8)
-            cr.fill()
-        elif k == "rect":
-            cr.rectangle(3, 4.5, 12, 9)
-            cr.stroke()
-        elif k == "oval":
-            cr.save()
-            cr.translate(9, 9)
-            cr.scale(6.5, 4.8)
-            cr.arc(0, 0, 1, 0, 2 * math.pi)
-            cr.restore()
-            cr.stroke()
-        elif k == "line":
-            cr.move_to(3.5, 14.5)
-            cr.line_to(14.5, 3.5)
-            cr.stroke()
-        elif k == "arrow":
-            cr.move_to(3.5, 14.5)
-            cr.line_to(12, 6)
-            cr.stroke()
-            cr.move_to(15, 3)
-            cr.line_to(8.5, 4.6)
-            cr.line_to(13.4, 9.5)
-            cr.close_path()
-            cr.fill()
-        elif k == "pen":
-            cr.move_to(2.5, 12)
-            cr.curve_to(5, 4, 8, 4, 9, 9)
-            cr.curve_to(10, 14, 13, 14, 15.5, 6)
-            cr.stroke()
-        elif k == "text":
-            cr.set_line_width(2)
-            cr.move_to(4, 4)
-            cr.line_to(14, 4)
-            cr.move_to(9, 4)
-            cr.line_to(9, 15)
-            cr.stroke()
-        elif k == "fill":
-            cr.rectangle(3, 4, 12, 10)
-            cr.fill()
-        elif k in ("undo", "redo"):
-            if k == "redo":
-                cr.translate(18, 0)
-                cr.scale(-1, 1)
-            cr.arc_negative(10, 10.5, 5, -0.2, math.pi * 1.02)
-            cr.stroke()
-            cr.move_to(5, 4.5)
-            cr.line_to(5, 10.5)
-            cr.line_to(11, 10.5)
-            cr.stroke()
-        elif k == "delete":
-            cr.move_to(3, 5)
-            cr.line_to(15, 5)
-            cr.move_to(7, 5)
-            cr.line_to(7.5, 3)
-            cr.line_to(10.5, 3)
-            cr.line_to(11, 5)
-            cr.stroke()
-            cr.move_to(4.5, 5)
-            cr.line_to(5.5, 15.5)
-            cr.line_to(12.5, 15.5)
-            cr.line_to(13.5, 5)
-            cr.stroke()
-        elif k in ("zoom-in", "zoom-out"):
-            cr.arc(7.5, 7.5, 5, 0, 2 * math.pi)
-            cr.stroke()
-            cr.set_line_width(2)
-            cr.move_to(11.3, 11.3)
-            cr.line_to(15.5, 15.5)
-            cr.stroke()
-            cr.set_line_width(1.5)
-            cr.move_to(5, 7.5)
-            cr.line_to(10, 7.5)
-            if k == "zoom-in":
-                cr.move_to(7.5, 5)
-                cr.line_to(7.5, 10)
-            cr.stroke()
-        elif k == "fit":
-            for x, y, dx, dy in ((3, 3, 1, 1), (15, 3, -1, 1), (15, 15, -1, -1), (3, 15, 1, -1)):
-                cr.move_to(x + 4 * dx, y)
-                cr.line_to(x, y)
-                cr.line_to(x, y + 4 * dy)
-            cr.stroke()
-            cr.rectangle(6.5, 6.5, 5, 5)
-            cr.fill()
+        ie.draw_icon(cr, self.kind, w, h, (c.red, c.green, c.blue, c.alpha))
 
 
 class ImageEditor(Gtk.Box):
@@ -164,29 +52,13 @@ class ImageEditor(Gtk.Box):
 
     def __init__(self):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        self.cfg = ir.load_config()
-        self.png = None            # the image as opened, never changed
-        self.surface = None
-        self.source_path = None
-        self.shapes = []
-        self.undo_stack, self.redo_stack = [], []
-        self.selected = None
-        self.passes = None         # OCR results, kept so settings changes don't re-read
-        self.generation = 0
-        self.saved_path = None
-        self.name = ""
-        self.folder = ir.pictures_folder()
-        self.unsaved = False       # changes made by hand since the last save or copy
+        self.ed = ie.Editor()
         self.zoom, self.fit = 1.0, True
         self.ox = self.oy = PAD
-        self.drag = None
-        self.draft = None
-        self.text_target = None
+        self.text_request = None
         self._loading_style = False
         self._scroll_target = None
-        self._cfg_save_id = 0
         self._settings_win = None
-        self.tool = "cover"
         self.ocr_ok, self.ocr_msg = ir.ocr_status()
 
         self.append(self._build_toolbar())
@@ -199,6 +71,10 @@ class ImageEditor(Gtk.Box):
         self.set_status("Paste a screenshot (Ctrl+V), drop an image here, or click Open."
                         if self.ocr_ok else self.ocr_msg.splitlines()[0] +
                         " You can still cover things by hand.")
+
+    @property
+    def unsaved(self):
+        return self.ed.unsaved
 
     # ================================================================== layout
     def _build_toolbar(self):
@@ -220,7 +96,7 @@ class ImageEditor(Gtk.Box):
         tools = hbox(0, css="linked")
         self.tool_buttons = {}
         group = None
-        for tid, name, key, tip in TOOLS:
+        for tid, _name, _key, tip in ie.TOOLS:
             b = Gtk.ToggleButton()
             b.set_child(ToolIcon(tid))
             b.set_tooltip_text(tip)
@@ -234,10 +110,10 @@ class ImageEditor(Gtk.Box):
 
         try:
             self.color_btn = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=False))
-            self.color_btn.connect("notify::rgba", self._style_changed)
+            self.color_btn.connect("notify::rgba", self._color_changed)
         except AttributeError:  # GTK before 4.10
             self.color_btn = Gtk.ColorButton()
-            self.color_btn.connect("color-set", self._style_changed)
+            self.color_btn.connect("color-set", self._color_changed)
         self.color_btn.set_tooltip_text("Color")
         self.fill_btn = Gtk.ToggleButton()
         fill_box = hbox(4)
@@ -245,17 +121,17 @@ class ImageEditor(Gtk.Box):
         fill_box.append(Gtk.Label(label="Fill"))
         self.fill_btn.set_child(fill_box)
         self.fill_btn.set_tooltip_text("Fill boxes and ovals instead of outlining them")
-        self.fill_btn.connect("toggled", self._style_changed)
-        self.width_spin = Gtk.SpinButton.new_with_range(1, 40, 1)
-        self.width_spin.set_tooltip_text("Line width")
-        self.width_spin.connect("value-changed", self._style_changed)
+        self.fill_btn.connect("toggled", self._fill_changed)
+        self.width_spin = self._spin(1, 40, 1, "Line width", "width")
         self.width_label = label("Width", "dim-label")
-        self.size_spin = Gtk.SpinButton.new_with_range(8, 200, 2)
-        self.size_spin.set_tooltip_text("Text size")
-        self.size_spin.connect("value-changed", self._style_changed)
+        self.size_spin = self._spin(8, 200, 2, "Text size", "size")
         self.size_label = label("Size", "dim-label")
+        self.corners_spin = self._spin(0, 60, 1, "Round the corners of Cover and Box shapes. "
+                                       "Rounded covers grow a little so the corners still "
+                                       "cover everything.", "corners")
+        self.corners_label = label("Corners", "dim-label")
         for w in (self.color_btn, self.fill_btn, self.width_label, self.width_spin,
-                  self.size_label, self.size_spin):
+                  self.size_label, self.size_spin, self.corners_label, self.corners_spin):
             w.set_valign(Gtk.Align.CENTER)
             bar.append(w)
 
@@ -275,7 +151,7 @@ class ImageEditor(Gtk.Box):
         box = vbox(6)
         margins(box, 10)
         self.auto_check = Gtk.CheckButton(label="Find PII when an image opens")
-        self.auto_check.set_active(self.cfg["find_on_open"])
+        self.auto_check.set_active(self.ed.cfg["find_on_open"])
         self.auto_check.connect("toggled", self._auto_toggled)
         box.append(self.auto_check)
         settings = Gtk.Button(label="Choose what gets covered")
@@ -283,15 +159,19 @@ class ImageEditor(Gtk.Box):
                                   "categories and word lists.")
         settings.connect("clicked", lambda *_: (pop.popdown(), self.open_settings()))
         box.append(settings)
-        tip = label("Shortcuts: V C R O L A P T pick tools. Ctrl+S saves, Ctrl+C copies, F2 "
-                    "renames, Ctrl+M moves. Ctrl+scroll zooms, middle-drag pans.",
-                    "dim-label", wrap=True)
+        tip = label("Shortcuts: " + ie.SHORTCUTS_HELP, "dim-label", wrap=True)
         tip.set_max_width_chars(42)
         box.append(tip)
         pop.set_child(box)
         menu.set_popover(pop)
         bar.append(menu)
         return bar
+
+    def _spin(self, low, high, step, tooltip, key):
+        spin = Gtk.SpinButton.new_with_range(low, high, step)
+        spin.set_tooltip_text(tooltip)
+        spin.connect("value-changed", self._spin_changed, key)
+        return spin
 
     def _icon_button(self, icon, tooltip, callback):
         b = Gtk.Button()
@@ -380,8 +260,7 @@ class ImageEditor(Gtk.Box):
         zoom.append(self.zoom_label)
         zoom.append(self._icon_button("zoom-in", "Zoom in (Ctrl++)",
                                       lambda: self.step_zoom(1)))
-        zoom.append(self._icon_button("fit", "Fit in the window (Ctrl+0)",
-                                      self.zoom_fit))
+        zoom.append(self._icon_button("fit", "Fit in the window (Ctrl+0)", self.zoom_fit))
         bar.append(zoom)
         self.copy_btn = button("Copy", self.copy, tooltip="Copy the finished image (Ctrl+C)")
         self.save_btn = button("Save", self.save, tooltip="Save the finished image (Ctrl+S)",
@@ -417,7 +296,7 @@ class ImageEditor(Gtk.Box):
                  ("<Control>minus", lambda: self.step_zoom(-1)),
                  ("<Control>KP_Subtract", lambda: self.step_zoom(-1)),
                  ("F2", self.focus_name), ("<Control>m", self.folder_btn.popup)]
-        for tid, _, key, _ in TOOLS:
+        for tid, _, key, _ in ie.TOOLS:
             pairs.append((key, lambda t=tid: self.set_tool(t)))
         for trigger, callback in pairs:
             keys.add_shortcut(Gtk.Shortcut(
@@ -435,24 +314,31 @@ class ImageEditor(Gtk.Box):
             self.spinner.stop()
 
     def _update_state(self):
-        have = self.surface is not None
+        have = self.ed.surface is not None
         for w in (self.save_btn, self.copy_btn, self.name_entry, self.folder_btn):
             w.set_sensitive(have)
         self.find_btn.set_sensitive(have and self.ocr_ok)
         if not self.ocr_ok:
             self.find_btn.set_tooltip_text(self.ocr_msg)
-        self.undo_btn.set_sensitive(bool(self.undo_stack))
-        self.redo_btn.set_sensitive(bool(self.redo_stack))
-        self.delete_btn.set_sensitive(self.selected is not None)
+        self.undo_btn.set_sensitive(bool(self.ed.undo_stack))
+        self.redo_btn.set_sensitive(bool(self.ed.redo_stack))
+        self.delete_btn.set_sensitive(self.ed.selected is not None)
         self.zoom_label.set_label(f"{round(self.zoom * 100)}%")
+
+    def _refresh(self):
+        self.area.queue_draw()
+        self._update_state()
 
     # ================================================================== loading
     def confirm_discard(self, then, action="Discard"):
-        if not self.unsaved:
+        if not self.ed.unsaved:
             then()
             return
-        dlg = Gtk.AlertDialog(message="Discard your changes to this image?",
-                              detail="They haven't been saved or copied.")
+        self._ask("Discard your changes to this image?", "They haven't been saved or copied.",
+                  action, then)
+
+    def _ask(self, message, detail, action, then):
+        dlg = Gtk.AlertDialog(message=message, detail=detail)
         dlg.set_buttons(["Cancel", action])
         dlg.set_cancel_button(0)
         dlg.set_default_button(0)
@@ -474,7 +360,7 @@ class ImageEditor(Gtk.Box):
             filters = Gio.ListStore.new(Gtk.FileFilter)
             filters.append(filt)
             dialog.set_filters(filters)
-            start = self.source_path and os.path.dirname(self.source_path)
+            start = self.ed.source_path and os.path.dirname(self.ed.source_path)
             if not start:
                 shots = os.path.join(ir.pictures_folder(), "Screenshots")
                 start = shots if os.path.isdir(shots) else ir.pictures_folder()
@@ -546,78 +432,55 @@ class ImageEditor(Gtk.Box):
 
     def load_png(self, png, path):
         try:
-            surface = ir.surface_from_png(png)
+            self.ed.load(png, path)
         except ir.ImageError as exc:
             self.set_status(str(exc))
             return
-        self.generation += 1
-        self.png, self.surface, self.source_path = png, surface, path
-        self.shapes, self.undo_stack, self.redo_stack = [], [], []
-        self.selected, self.passes, self.saved_path, self.unsaved = None, None, None, False
-        self.name = ir.default_name(path)
-        if path:
-            self.folder = os.path.dirname(os.path.abspath(path))
-        else:
-            recent = [f for f in self.cfg["recent_folders"] if os.path.isdir(f)]
-            self.folder = recent[0] if recent else ir.pictures_folder()
-        self.name_entry.set_text(self.name)
+        self.name_entry.set_text(self.ed.name)
         self._update_folder_button()
+        self._sync_style_controls()
         self.zoom_fit()
         self._update_state()
         self.area.grab_focus()
-        w, h = surface.get_width(), surface.get_height()
-        where = os.path.basename(path) if path else "Pasted image"
-        if self.ocr_ok and self.cfg["find_on_open"]:
+        if self.ocr_ok and self.ed.cfg["find_on_open"]:
             self.find_pii()
         else:
-            self.set_status(f"{where}, {w}x{h}. Cover anything that shouldn't be shared.")
+            self.set_status(self.ed.describe())
 
     # ================================================================== detection
     def find_pii(self):
-        if self.png is None or not self.ocr_ok:
+        ed = self.ed
+        if ed.png is None or not self.ocr_ok:
             return
-        if self.passes is not None:
+        if ed.passes is not None:
             self._apply_boxes()
             return
-        gen = self.generation
-        png, lang = self.png, self.cfg["language"]
+        gen, png, lang = ed.generation, ed.png, ed.cfg["language"]
         self.find_btn.set_sensitive(False)
         self.set_status("Reading the text in the image...", busy=True)
 
         def done(passes):
-            if gen != self.generation:
+            if gen != ed.generation:
                 return
-            self.passes = passes
+            ed.passes = passes
             self.find_btn.set_sensitive(True)
             self._apply_boxes()
 
         def failed(exc):
-            if gen != self.generation:
+            if gen != ed.generation:
                 return
             self.find_btn.set_sensitive(True)
             self.set_status(str(exc).splitlines()[0])
         run_bg(lambda: ir.read_text(png, lang), done, failed)
 
     def _apply_boxes(self):
-        size = (self.surface.get_width(), self.surface.get_height())
-        boxes = ir.find_boxes(self.passes, ir.redaction_options(), size)
-        new = [ir.cover_shape(b, self.cfg["box_color"], auto=True) for b in boxes]
-        old_auto = [s for s in self.shapes if s.get("auto")]
-        if old_auto or new:
-            self._checkpoint()
-            self.shapes = [s for s in self.shapes if not s.get("auto")] + new
-            if self.selected is not None and self.selected.get("auto"):
-                self.selected = None
-        self.area.queue_draw()
-        self._update_state()
-        msg = ir.summary([b[4] for b in boxes])
-        tail = (" Check it over and cover anything it missed." if boxes else
-                ". Check it over and cover anything that shouldn't be shared.")
-        self.set_status(msg + ("." if boxes else "") + tail)
+        msg = self.ed.apply_passes()
+        self._refresh()
+        self.set_status(msg)
 
     def _auto_toggled(self, check):
-        self.cfg["find_on_open"] = check.get_active()
-        self._save_cfg()
+        self.ed.cfg["find_on_open"] = check.get_active()
+        self.ed.save_cfg()
 
     def open_settings(self):
         from .redact_page import RedactSettingsWindow
@@ -635,7 +498,7 @@ class ImageEditor(Gtk.Box):
 
     def _redact_settings_saved(self):
         # The text was already read, so finding again with new settings is instant.
-        if self.passes is not None:
+        if self.ed.passes is not None:
             self._apply_boxes()
 
     # ================================================================== tools and style
@@ -645,118 +508,61 @@ class ImageEditor(Gtk.Box):
     def _tool_toggled(self, btn, tid):
         if not btn.get_active():
             return
-        self.tool = tid
-        if tid != "select":
-            self.selected = None
+        self.ed.set_tool(tid)
         self.area.set_cursor_from_name("default" if tid == "select" else "crosshair")
         self._sync_style_controls()
-        self.area.queue_draw()
-        self._update_state()
-
-    def _style_kind(self):
-        return self.selected["kind"] if self.selected else self.tool
+        self._refresh()
 
     def _sync_style_controls(self):
-        kind = self._style_kind()
+        st = self.ed.style()
         self._loading_style = True
-        if self.selected:
-            color = self.selected["color"]
-        else:
-            color = self.cfg["box_color"] if kind == "cover" else self.cfg["draw_color"]
-        self.color_btn.set_rgba(rgba(color))
-        sel = self.selected
-        self.fill_btn.set_active(bool(sel.get("fill")) if sel else self.cfg["fill"])
-        self.width_spin.set_value(sel.get("width", self.cfg["width"]) if sel and kind != "cover"
-                                  else self.cfg["width"])
-        self.size_spin.set_value(sel["size"] if sel and kind == "text" else self.cfg["text_size"])
-        self.fill_btn.set_visible(kind in ("rect", "oval"))
-        line_like = kind in ("rect", "oval", "line", "arrow", "pen")
-        self.width_spin.set_visible(line_like)
-        self.width_label.set_visible(line_like)
-        self.size_spin.set_visible(kind == "text")
-        self.size_label.set_visible(kind == "text")
-        self.color_btn.set_visible(kind != "select")
+        self.color_btn.set_rgba(rgba(st["color"]))
+        self.fill_btn.set_active(st["fill"])
+        self.width_spin.set_value(st["width"])
+        self.size_spin.set_value(st["size"])
+        self.corners_spin.set_value(st["corners"])
+        self.color_btn.set_visible(st["show_color"])
+        self.fill_btn.set_visible(st["show_fill"])
+        for w in (self.width_spin, self.width_label):
+            w.set_visible(st["show_width"])
+        for w in (self.size_spin, self.size_label):
+            w.set_visible(st["show_size"])
+        for w in (self.corners_spin, self.corners_label):
+            w.set_visible(st["show_corners"])
         self._loading_style = False
 
-    def _style_changed(self, *_):
+    def _apply_style(self, **change):
         if self._loading_style:
             return
-        color = from_rgba(self.color_btn.get_rgba())
-        kind = self._style_kind()
-        if self.selected:
-            self._checkpoint()
-            sel = self.selected
-            sel["color"] = color
-            if kind in ("rect", "oval"):
-                sel["fill"] = self.fill_btn.get_active()
-            if kind in ("rect", "oval", "line", "arrow", "pen"):
-                sel["width"] = self.width_spin.get_value()
-            if kind == "text":
-                sel["size"] = self.size_spin.get_value()
-            sel.pop("auto", None)
-            self._changed()
-        else:
-            if kind == "cover":
-                self.cfg["box_color"] = color
-            elif kind != "select":
-                self.cfg["draw_color"] = color
-            if kind in ("rect", "oval"):
-                self.cfg["fill"] = self.fill_btn.get_active()
-            self.cfg["width"] = int(self.width_spin.get_value())
-            self.cfg["text_size"] = int(self.size_spin.get_value())
-            self._save_cfg()
+        if self.ed.set_style(**change):
+            self._refresh()
 
-    def _save_cfg(self):
-        if self._cfg_save_id:
-            GLib.source_remove(self._cfg_save_id)
+    def _color_changed(self, *_):
+        self._apply_style(color=from_rgba(self.color_btn.get_rgba()))
 
-        def go():
-            self._cfg_save_id = 0
-            cfg = ir.load_config()
-            for key in ("find_on_open", "box_color", "draw_color", "width", "fill", "text_size",
-                        "recent_folders"):
-                cfg[key] = self.cfg[key]
-            ir.save_config(cfg)
-            return GLib.SOURCE_REMOVE
-        self._cfg_save_id = GLib.timeout_add(400, go)
+    def _fill_changed(self, btn):
+        self._apply_style(fill=btn.get_active())
+
+    def _spin_changed(self, spin, key):
+        self._apply_style(**{key: spin.get_value()})
 
     # ================================================================== undo
-    def _checkpoint(self):
-        self.undo_stack.append(copy.deepcopy(self.shapes))
-        del self.undo_stack[:-100]
-        self.redo_stack.clear()
-
-    def _changed(self):
-        self.unsaved = True
-        self.area.queue_draw()
-        self._update_state()
-
     def undo(self):
-        if self.undo_stack:
-            self.redo_stack.append(copy.deepcopy(self.shapes))
-            self.shapes = self.undo_stack.pop()
-            self.selected = None
-            self._changed()
+        if self.ed.undo():
+            self._sync_style_controls()
+            self._refresh()
 
     def redo(self):
-        if self.redo_stack:
-            self.undo_stack.append(copy.deepcopy(self.shapes))
-            self.shapes = self.redo_stack.pop()
-            self.selected = None
-            self._changed()
+        if self.ed.redo():
+            self._sync_style_controls()
+            self._refresh()
 
     def delete_selected(self):
-        if self.selected is not None and self.selected in self.shapes:
-            self._checkpoint()
-            self.shapes = [s for s in self.shapes if s is not self.selected]
-            self.selected = None
+        if self.ed.delete_selected():
             self._sync_style_controls()
-            self._changed()
+            self._refresh()
 
     # ================================================================== zoom
-    def _image_size(self):
-        return (self.surface.get_width(), self.surface.get_height()) if self.surface else (1, 1)
-
     def zoom_fit(self):
         self.fit = True
         self.area.set_content_width(1)
@@ -764,20 +570,19 @@ class ImageEditor(Gtk.Box):
         self._fit_zoom(self.area.get_width(), self.area.get_height())
 
     def _fit_zoom(self, w, h):
-        iw, ih = self._image_size()
-        if w > 2 * PAD and h > 2 * PAD:
-            self.zoom = min((w - 2 * PAD) / iw, (h - 2 * PAD) / ih, 1.0)
-        self.area.queue_draw()
-        self._update_state()
+        z = ie.fit_zoom(self.ed.size, w, h)
+        if z:
+            self.zoom = z
+        self._refresh()
 
     def _resized(self, area, w, h):
         if self.fit:
             self._fit_zoom(w, h)
 
     def set_zoom(self, zoom, anchor=None):
-        if self.surface is None:
+        if self.ed.surface is None:
             return
-        zoom = min(max(zoom, ZOOMS[0]), ZOOMS[-1])
+        zoom = ie.clamp_zoom(zoom)
         hadj, vadj = self.scroller.get_hadjustment(), self.scroller.get_vadjustment()
         if anchor is None:
             anchor = (hadj.get_page_size() / 2, vadj.get_page_size() / 2)
@@ -785,17 +590,16 @@ class ImageEditor(Gtk.Box):
         ix, iy = self.to_image(hadj.get_value() + vx, vadj.get_value() + vy)
         self.fit = False
         self.zoom = zoom
-        iw, ih = self._image_size()
+        iw, ih = self.ed.size
         cw, ch = int(iw * zoom + 2 * PAD), int(ih * zoom + 2 * PAD)
         self.area.set_content_width(cw)
         self.area.set_content_height(ch)
         # Keep the same spot under the pointer once the new size is laid out.
-        ox = max(PAD, (max(cw, hadj.get_page_size()) - iw * zoom) / 2)
-        oy = max(PAD, (max(ch, vadj.get_page_size()) - ih * zoom) / 2)
+        ox, oy = ie.offsets(self.ed.size, zoom, max(cw, hadj.get_page_size()),
+                            max(ch, vadj.get_page_size()))
         self._scroll_target = (ox + ix * zoom - vx, oy + iy * zoom - vy)
         self._adjustment_changed()
-        self.area.queue_draw()
-        self._update_state()
+        self._refresh()
 
     def _adjustment_changed(self, *_):
         if self._scroll_target is None:
@@ -806,15 +610,11 @@ class ImageEditor(Gtk.Box):
             adj.set_value(min(max(value, 0), max(adj.get_upper() - adj.get_page_size(), 0)))
 
     def step_zoom(self, direction, anchor=None):
-        if direction > 0:
-            nxt = next((z for z in ZOOMS if z > self.zoom * 1.01), ZOOMS[-1])
-        else:
-            nxt = next((z for z in reversed(ZOOMS) if z < self.zoom * 0.99), ZOOMS[0])
-        self.set_zoom(nxt, anchor)
+        self.set_zoom(ie.step_zoom(self.zoom, direction), anchor)
 
     def _scrolled(self, ctrl, dx, dy):
         state = ctrl.get_current_event_state()
-        if not state & Gdk.ModifierType.CONTROL_MASK or self.surface is None:
+        if not state & Gdk.ModifierType.CONTROL_MASK or self.ed.surface is None:
             return False
         hadj, vadj = self.scroller.get_hadjustment(), self.scroller.get_vadjustment()
         px, py = getattr(self, "_pointer", (hadj.get_page_size() / 2, vadj.get_page_size() / 2))
@@ -832,220 +632,82 @@ class ImageEditor(Gtk.Box):
         self.scroller.get_hadjustment().set_value(hx - dx)
         self.scroller.get_vadjustment().set_value(vy - dy)
 
-    # ================================================================== coordinates
+    # ================================================================== mouse
     def to_image(self, x, y):
         return (x - self.ox) / self.zoom, (y - self.oy) / self.zoom
 
     def to_view(self, x, y):
         return self.ox + x * self.zoom, self.oy + y * self.zoom
 
-    def _handles(self, shape):
-        if shape["kind"] in ("line", "arrow"):
-            return [(shape["x1"], shape["y1"]), (shape["x2"], shape["y2"])]
-        if shape["kind"] in ("cover", "rect", "oval"):
-            x1, y1, x2, y2 = ir.rect_of(shape)
-            return [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-        return []
-
-    def _handle_at(self, x, y):
-        if self.selected is None:
-            return None
-        for i, (hx, hy) in enumerate(self._handles(self.selected)):
-            vx, vy = self.to_view(hx, hy)
-            if abs(vx - x) <= HANDLE + 3 and abs(vy - y) <= HANDLE + 3:
-                return i
-        return None
-
-    def _shape_at(self, ix, iy):
-        tol = 5 / self.zoom
-        for shape in reversed(self.shapes):
-            if ir.hit(shape, ix, iy, tol):
-                return shape
-        return None
-
-    # ================================================================== mouse
     def _pressed(self, gesture, n, x, y):
         self.area.grab_focus()
-        if n == 2 and self.surface is not None:
-            shape = self._shape_at(*self.to_image(x, y))
-            if shape and shape["kind"] == "text":
-                self._edit_text(shape)
+        if n == 2 and self.ed.surface is not None:
+            request = self.ed.text_at_double_click(*self.to_image(x, y), self.zoom)
+            if request:
+                self._show_text_entry(request)
 
     def _drag_begin(self, gesture, x, y):
         self.area.grab_focus()
-        if self.surface is None:
+        if self.ed.surface is None:
             return
-        ix, iy = self.to_image(x, y)
-        self.drag = {"start": (ix, iy), "view": (x, y), "moved": False}
-        tool = self.tool
-        if tool == "select":
-            handle = self._handle_at(x, y)
-            if handle is not None:
-                self.drag.update(mode="resize", handle=handle,
-                                 before=copy.deepcopy(self.shapes),
-                                 orig=copy.deepcopy(self.selected))
-                if self.selected["kind"] in ("cover", "rect", "oval"):
-                    x1, y1, x2, y2 = ir.rect_of(self.selected)
-                    self.selected.update(x1=x1, y1=y1, x2=x2, y2=y2)
-                    self.drag["orig"] = copy.deepcopy(self.selected)
-                return
-            shape = self._shape_at(ix, iy)
-            self.selected = shape
-            self._sync_style_controls()
-            if shape is not None:
-                self.drag.update(mode="move", before=copy.deepcopy(self.shapes),
-                                 orig=copy.deepcopy(shape))
-            else:
-                self.drag["mode"] = None
-            self.area.queue_draw()
-            self._update_state()
-            return
-        if tool == "text":
-            self.drag["mode"] = "text"
-            return
-        color = self.cfg["box_color"] if tool == "cover" else self.cfg["draw_color"]
-        if tool == "pen":
-            self.draft = {"kind": "pen", "points": [[ix, iy]], "color": list(color),
-                          "width": self.cfg["width"], "fill": False}
-        else:
-            self.draft = {"kind": tool, "x1": ix, "y1": iy, "x2": ix, "y2": iy,
-                          "color": list(color), "width": 0 if tool == "cover" else
-                          self.cfg["width"], "fill": tool == "cover" or (
-                              tool in ("rect", "oval") and self.cfg["fill"])}
-        self.drag["mode"] = "create"
+        self._drag_origin = (x, y)
+        self.ed.drag_begin(*self.to_image(x, y), self.zoom)
+        self._sync_style_controls()
+        self._refresh()
 
     def _drag_update(self, gesture, dx, dy):
-        d = self.drag
-        if not d or not d.get("mode"):
+        if not self.ed.drag:
             return
-        if abs(dx) > 2 or abs(dy) > 2:
-            d["moved"] = True
-        sx, sy = d["start"]
-        ix, iy = sx + dx / self.zoom, sy + dy / self.zoom
-        shift = gesture.get_current_event_state() & Gdk.ModifierType.SHIFT_MASK
-        mode = d["mode"]
-        if mode == "create" and self.draft is not None:
-            if self.draft["kind"] == "pen":
-                last = self.draft["points"][-1]
-                if math.hypot(ix - last[0], iy - last[1]) * self.zoom >= 2:
-                    self.draft["points"].append([ix, iy])
-            else:
-                if shift:
-                    ix, iy = self._constrain(self.draft["kind"], sx, sy, ix, iy)
-                self.draft["x2"], self.draft["y2"] = ix, iy
-        elif mode == "move" and self.selected is not None:
-            o = d["orig"]
-            for k in ("x1", "y1", "x2", "y2", "x", "y", "points"):
-                if k in o:
-                    self.selected[k] = copy.deepcopy(o[k])
-            ir.translate(self.selected, dx / self.zoom, dy / self.zoom)
-        elif mode == "resize" and self.selected is not None:
-            o, h, sel = d["orig"], d["handle"], self.selected
-            if sel["kind"] in ("line", "arrow"):
-                if shift:
-                    ax, ay = (o["x2"], o["y2"]) if h == 0 else (o["x1"], o["y1"])
-                    ix, iy = self._constrain(sel["kind"], ax, ay, ix, iy)
-                sel["x1" if h == 0 else "x2"] = ix
-                sel["y1" if h == 0 else "y2"] = iy
-            else:
-                sel["x1"] = ix if h in (0, 3) else o["x1"]
-                sel["x2"] = ix if h in (1, 2) else o["x2"]
-                sel["y1"] = iy if h in (0, 1) else o["y1"]
-                sel["y2"] = iy if h in (2, 3) else o["y2"]
-        self.area.queue_draw()
-
-    @staticmethod
-    def _constrain(kind, sx, sy, x, y):
-        dx, dy = x - sx, y - sy
-        if kind in ("cover", "rect", "oval"):
-            side = max(abs(dx), abs(dy))
-            return sx + math.copysign(side, dx or 1), sy + math.copysign(side, dy or 1)
-        angle = round(math.atan2(dy, dx) / (math.pi / 4)) * (math.pi / 4)
-        length = math.hypot(dx, dy)
-        return sx + length * math.cos(angle), sy + length * math.sin(angle)
+        x0, y0 = self._drag_origin
+        shift = bool(gesture.get_current_event_state() & Gdk.ModifierType.SHIFT_MASK)
+        if self.ed.drag_update(*self.to_image(x0 + dx, y0 + dy), shift, self.zoom):
+            self.area.queue_draw()
 
     def _drag_end(self, gesture, dx, dy):
-        d, self.drag = self.drag, None
-        if not d or not d.get("mode"):
-            return
-        mode = d["mode"]
-        if mode == "text":
-            if not d["moved"]:
-                hit = self._shape_at(*d["start"])
-                if hit is not None and hit["kind"] == "text":
-                    self._edit_text(hit)
-                else:
-                    self._new_text(*d["start"])
-            return
-        if mode == "create":
-            draft, self.draft = self.draft, None
-            if draft is None:
-                return
-            if draft["kind"] == "pen":
-                keep = len(draft["points"]) >= 2 or not d["moved"]
-            else:
-                x1, y1, x2, y2 = ir.rect_of(draft)
-                keep = max(x2 - x1, y2 - y1) * self.zoom >= 4
-            if keep:
-                self._checkpoint()
-                self.shapes.append(draft)
-                self._changed()
-            self.area.queue_draw()
-            return
-        if d["moved"] and self.selected is not None:
-            self.undo_stack.append(d["before"])
-            del self.undo_stack[:-100]
-            self.redo_stack.clear()
-            self.selected.pop("auto", None)
-            self._changed()
+        request = self.ed.drag_end(self.zoom)
+        if request:
+            self._show_text_entry(request)
+        self._refresh()
 
     def _motion(self, ctrl, x, y):
         self._pointer = (x, y)
-        if self.surface is None or self.drag:
+        if self.ed.surface is None or self.ed.drag:
             return
-        if self.tool == "select":
-            if self._handle_at(x, y) is not None:
+        if self.ed.tool == "select":
+            ix, iy = self.to_image(x, y)
+            if self.ed.handle_at(ix, iy, (ie.HANDLE + 3) / self.zoom) is not None:
                 self.area.set_cursor_from_name("crosshair")
                 return
-            shape = self._shape_at(*self.to_image(x, y))
-            self.area.set_cursor_from_name("move" if shape else "default")
-            if shape is not None and shape.get("auto"):
-                self.status.set_text("Found by text detection: " + ir.label_name(
-                    shape.get("label", "")))
+            over = self.ed.shape_at(ix, iy, 5 / self.zoom)
+            self.area.set_cursor_from_name("move" if over else "default")
+            hover = self.ed.hover_text(ix, iy, 5 / self.zoom)
+            if hover:
+                self.status.set_text(hover)
 
     def _key_pressed(self, ctrl, keyval, keycode, state):
         if keyval in (Gdk.KEY_Delete, Gdk.KEY_BackSpace, Gdk.KEY_KP_Delete):
             self.delete_selected()
             return True
         if keyval == Gdk.KEY_Escape:
-            self.drag, self.draft, self.selected = None, None, None
+            self.ed.escape()
             self._sync_style_controls()
-            self.area.queue_draw()
-            self._update_state()
+            self._refresh()
             return True
         moves = {Gdk.KEY_Left: (-1, 0), Gdk.KEY_Right: (1, 0), Gdk.KEY_Up: (0, -1),
                  Gdk.KEY_Down: (0, 1)}
-        if keyval in moves and self.selected is not None:
+        if keyval in moves and self.ed.selected is not None:
             step = 10 if state & Gdk.ModifierType.SHIFT_MASK else 1
-            self._checkpoint()
-            ir.translate(self.selected, moves[keyval][0] * step, moves[keyval][1] * step)
-            self.selected.pop("auto", None)
-            self._changed()
+            self.ed.nudge(moves[keyval][0] * step, moves[keyval][1] * step)
+            self._refresh()
             return True
         return False
 
     # ================================================================== text
-    def _new_text(self, ix, iy):
-        self.text_target = (ix, iy, None)
-        self.text_entry.set_text("")
-        self._show_text_popover(ix, iy)
-
-    def _edit_text(self, shape):
-        self.text_target = (shape["x"], shape["y"], shape)
-        self.text_entry.set_text(shape["text"])
-        self._show_text_popover(shape["x"], shape["y"])
-
-    def _show_text_popover(self, ix, iy):
+    def _show_text_entry(self, request):
+        self.text_request = request
+        kind, value = request
+        ix, iy = (value["x"], value["y"]) if kind == "edit" else value
+        self.text_entry.set_text(value["text"] if kind == "edit" else "")
         vx, vy = self.to_view(ix, iy)
         rect = Gdk.Rectangle()
         rect.x, rect.y, rect.width, rect.height = int(vx), int(vy), 1, 1
@@ -1054,88 +716,21 @@ class ImageEditor(Gtk.Box):
         self.text_entry.grab_focus()
 
     def _commit_text(self):
-        text = self.text_entry.get_text()
-        target, self.text_target = self.text_target, None
+        request, self.text_request = self.text_request, None
         self.text_pop.popdown()
-        if target is None:
-            return
-        ix, iy, shape = target
-        if shape is not None:
-            if text.strip() and text != shape["text"]:
-                self._checkpoint()
-                shape["text"] = text
-                self._changed()
-            elif not text.strip():
-                self.selected = shape
-                self.delete_selected()
-            return
-        if text.strip():
-            self._checkpoint()
-            self.shapes.append({"kind": "text", "x": ix, "y": iy, "text": text,
-                                "size": self.cfg["text_size"],
-                                "color": list(self.cfg["draw_color"]), "width": 0,
-                                "fill": False})
-            self._changed()
+        if self.ed.commit_text(request, self.text_entry.get_text()):
+            self._refresh()
 
     # ================================================================== drawing
     def _draw(self, area, cr, w, h):
         fg = fg_color(area)
         cr.set_source_rgba(fg.red, fg.green, fg.blue, 0.05)
         cr.paint()
-        if self.surface is None:
+        if self.ed.surface is None:
             self._draw_empty(cr, w, h, fg)
             return
-        iw, ih = self._image_size()
-        z = self.zoom
-        self.ox = max(PAD, (w - iw * z) / 2)
-        self.oy = max(PAD, (h - ih * z) / 2)
-        cr.set_source_rgba(0, 0, 0, 0.25)
-        cr.rectangle(self.ox + 1, self.oy + 2, iw * z, ih * z)
-        cr.fill()
-        cr.save()
-        cr.translate(self.ox, self.oy)
-        cr.scale(z, z)
-        cr.rectangle(0, 0, iw, ih)
-        cr.clip()
-        cr.set_source_surface(self.surface, 0, 0)
-        cr.get_source().set_filter(cairo.FILTER_GOOD if z < 1 else (
-            cairo.FILTER_NEAREST if z >= 2 else cairo.FILTER_BILINEAR))
-        cr.paint()
-        see = self.peek_btn.get_active()
-        ir.draw_shapes(cr, self.shapes, see_through=see)
-        if see:
-            cr.set_line_width(1.5 / z)
-            cr.set_dash([4 / z, 3 / z])
-            for s in self.shapes:
-                if ir.is_cover(s):
-                    x1, y1, x2, y2 = ir.rect_of(s)
-                    cr.set_source_rgba(1, 0.75, 0, 0.95)
-                    cr.rectangle(x1, y1, x2 - x1, y2 - y1)
-                    cr.stroke()
-            cr.set_dash([])
-        if self.draft is not None:
-            ir.draw_shapes(cr, [self.draft])
-        cr.restore()
-        if self.selected is not None and self.selected in self.shapes:
-            self._draw_selection(cr)
-
-    def _draw_selection(self, cr):
-        x1, y1, x2, y2 = ir.bbox(self.selected)
-        vx1, vy1 = self.to_view(x1, y1)
-        vx2, vy2 = self.to_view(x2, y2)
-        cr.set_line_width(1)
-        cr.set_dash([5, 3])
-        cr.set_source_rgba(0.2, 0.52, 0.89, 1)
-        cr.rectangle(vx1 - 3.5, vy1 - 3.5, vx2 - vx1 + 7, vy2 - vy1 + 7)
-        cr.stroke()
-        cr.set_dash([])
-        for hx, hy in self._handles(self.selected):
-            vx, vy = self.to_view(hx, hy)
-            cr.rectangle(vx - HANDLE, vy - HANDLE, HANDLE * 2, HANDLE * 2)
-            cr.set_source_rgb(1, 1, 1)
-            cr.fill_preserve()
-            cr.set_source_rgba(0.2, 0.52, 0.89, 1)
-            cr.stroke()
+        self.ox, self.oy = ie.offsets(self.ed.size, self.zoom, w, h)
+        ie.paint(cr, self.ed, self.ox, self.oy, self.zoom, peek=self.peek_btn.get_active())
 
     def _draw_empty(self, cr, w, h, fg):
         import gi
@@ -1161,34 +756,23 @@ class ImageEditor(Gtk.Box):
         cr.stroke()
 
     # ================================================================== files
-    def _target(self):
-        return os.path.join(self.folder, self.name)
-
     def _update_folder_button(self):
-        name = os.path.basename(self.folder.rstrip(os.sep)) or self.folder
-        if os.path.abspath(self.folder) == os.path.expanduser("~"):
+        folder = self.ed.folder
+        name = os.path.basename(folder.rstrip(os.sep)) or folder
+        if os.path.abspath(folder) == os.path.expanduser("~"):
             name = "Home"
         self.folder_btn.set_label(name)
-        self.folder_btn.set_tooltip_text(f"{ir.short_path(self.folder)}\nPick where it saves. "
+        self.folder_btn.set_tooltip_text(f"{ir.short_path(folder)}\nPick where it saves. "
                                          "Once saved, picking a folder moves the file (Ctrl+M).")
 
     def _fill_folder_menu(self):
         box = vbox(2)
         margins(box, 8)
-        heading = "Move to" if self.saved_path else "Save in"
-        box.append(label(heading, "heading"))
-        seen = set()
-        folders = [self.folder] + list(self.cfg["recent_folders"])
-        if self.source_path:
-            folders.append(os.path.dirname(self.source_path))
-        folders.append(ir.pictures_folder())
-        for f in folders:
-            f = os.path.abspath(f)
-            if f in seen or not os.path.isdir(f):
-                continue
-            seen.add(f)
+        box.append(label("Move to" if self.ed.saved_path else "Save in", "heading"))
+        current = os.path.abspath(self.ed.folder)
+        for f in self.ed.folder_choices():
             b = Gtk.ToggleButton(label=ir.short_path(f))
-            b.set_active(f == os.path.abspath(self.folder))
+            b.set_active(f == current)
             b.add_css_class("flat")
             b.get_child().set_xalign(0)
             b.connect("clicked", lambda _b, path=f: (self.folder_pop.popdown(),
@@ -1206,9 +790,10 @@ class ImageEditor(Gtk.Box):
         self.folder_pop.set_child(box)
 
     def choose_folder(self):
-        dialog = Gtk.FileDialog(title="Move to folder" if self.saved_path else "Save in folder")
-        if os.path.isdir(self.folder):
-            dialog.set_initial_folder(Gio.File.new_for_path(self.folder))
+        dialog = Gtk.FileDialog(title="Move to folder" if self.ed.saved_path
+                                else "Save in folder")
+        if os.path.isdir(self.ed.folder):
+            dialog.set_initial_folder(Gio.File.new_for_path(self.ed.folder))
 
         def done(dlg, result):
             try:
@@ -1220,135 +805,71 @@ class ImageEditor(Gtk.Box):
         dialog.select_folder(self.get_root(), None, done)
 
     def show_folder(self):
-        folder = os.path.dirname(self.saved_path) if self.saved_path else self.folder
+        folder = os.path.dirname(self.ed.saved_path) if self.ed.saved_path else self.ed.folder
         try:
             Gio.AppInfo.launch_default_for_uri(Gio.File.new_for_path(folder).get_uri(), None)
         except GLib.Error as exc:
             self.set_status(f"Couldn't open the folder: {exc.message}")
 
     def focus_name(self):
-        if self.surface is None:
+        if self.ed.surface is None:
             return
         self.name_entry.grab_focus()
         stem = os.path.splitext(self.name_entry.get_text())[0]
         self.name_entry.select_region(0, len(stem))
 
-    def _ask_replace(self, path, then):
-        dlg = Gtk.AlertDialog(message=f"Replace {os.path.basename(path)}?",
-                              detail=f"There's already a file with that name in "
-                                     f"{ir.short_path(os.path.dirname(path))}.")
-        dlg.set_buttons(["Cancel", "Replace"])
-        dlg.set_cancel_button(0)
-        dlg.set_default_button(0)
+    def _show_outcome(self, outcome, quiet=False):
+        """Act on what a rename, move or save said back, asking first when it would replace
+        a file."""
+        if outcome.kind == "ask":
+            dest = outcome.dest
+            verb = outcome.message
 
-        def done(d, result):
-            try:
-                if d.choose_finish(result) == 1:
-                    then()
-            except GLib.Error:
-                pass
-        dlg.choose(self.get_root(), None, done)
+            def go():
+                if verb == "Save":
+                    self._show_outcome(self.ed.write(dest))
+                else:
+                    self._show_outcome(self.ed.relocate(dest, verb))
+            self._ask(f"Replace {os.path.basename(dest)}?",
+                      f"There's already a file with that name in "
+                      f"{ir.short_path(os.path.dirname(dest))}.", "Replace", go)
+        elif outcome.kind == "error":
+            if quiet:
+                self.set_status(outcome.message)
+            else:
+                show_message(self.get_root(), "Something went wrong", outcome.message)
+        elif outcome.kind == "done" and outcome.message and not quiet:
+            self.set_status(outcome.message)
+        self.name_entry.set_text(self.ed.name)
+        self._update_folder_button()
 
     def apply_name(self, quiet=False):
-        if self.surface is None:
+        if self.ed.surface is None:
             return
-        typed = self.name_entry.get_text()
-        try:
-            name = ir.clean_name(typed, ir.file_type(self.name))
-        except ValueError as exc:
-            self.name_entry.set_text(self.name)
-            if not quiet:
-                self.set_status(str(exc))
-            return
-        if name == self.name:
-            if typed != name:
-                self.name_entry.set_text(name)
-            return
-        if not self.saved_path:
-            self.name = name
-            self.name_entry.set_text(name)
-            if not quiet:
-                self.set_status(f"Will save as {ir.short_path(self._target())}")
-            return
-        self._relocate(os.path.join(os.path.dirname(self.saved_path), name), "Renamed to")
+        self._show_outcome(self.ed.rename(self.name_entry.get_text()), quiet=quiet)
 
     def set_folder(self, folder):
-        folder = os.path.abspath(folder)
-        if not self.saved_path:
-            self.folder = folder
-            self._update_folder_button()
-            self.set_status(f"Will save as {ir.short_path(self._target())}")
-            return
-        if folder == os.path.dirname(self.saved_path):
-            return
-        self._relocate(os.path.join(folder, os.path.basename(self.saved_path)), "Moved to")
-
-    def _relocate(self, dest, verb):
-        src = self.saved_path
-
-        def go():
-            try:
-                ir.relocate(src, dest)
-            except (OSError, ir.ImageError) as exc:
-                self.name_entry.set_text(self.name)
-                show_message(self.get_root(), "Couldn't move the file", str(exc))
-                return
-            self.saved_path = dest
-            self.folder, self.name = os.path.dirname(dest), os.path.basename(dest)
-            self.name_entry.set_text(self.name)
-            self._update_folder_button()
-            self._remember(self.folder)
-            self.set_status(f"{verb} {ir.short_path(dest)}")
-
-        if os.path.exists(dest) and os.path.abspath(dest) != os.path.abspath(src):
-            self.name_entry.set_text(self.name)
-            self._ask_replace(dest, go)
-        elif not os.path.exists(src):
-            # Moved or deleted outside the app, so the next save just writes a new file.
-            self.saved_path = None
-            self.folder, self.name = os.path.dirname(dest), os.path.basename(dest)
-            self.name_entry.set_text(self.name)
-            self._update_folder_button()
-            self.set_status(f"The saved file is gone. Will save as {ir.short_path(dest)}")
-        else:
-            go()
-
-    def _remember(self, folder):
-        ir.remember_folder(self.cfg, folder)
-        self._save_cfg()
+        self._show_outcome(self.ed.move_to(folder))
 
     def save(self):
-        if self.surface is None:
+        if self.ed.surface is None:
             return
         self.apply_name(quiet=True)
-        path = self._target()
-        if os.path.exists(path) and path != self.saved_path:
-            self._ask_replace(path, lambda: self._write(path))
+        plan = self.ed.plan_save()
+        if plan.kind == "ask":
+            self._show_outcome(plan)
         else:
-            self._write(path)
-
-    def _write(self, path):
-        try:
-            data = ir.encode(self.png, self.shapes, ir.file_type(path))
-            ir.write_atomic(path, data)
-        except (OSError, ir.ImageError) as exc:
-            show_message(self.get_root(), "Couldn't save", str(exc))
-            return
-        self.saved_path = path
-        self.unsaved = False
-        self._remember(os.path.dirname(path))
-        self.set_status(f"Saved to {ir.short_path(path)}")
+            self._show_outcome(self.ed.write(plan.dest))
 
     def copy(self):
-        if self.surface is None:
+        if self.ed.surface is None:
             return
         try:
-            png = ir.encode(self.png, self.shapes, ".png")
+            png = self.ed.copy_png()
         except ir.ImageError as exc:
             self.set_status(str(exc))
             return
         set_clipboard_image(self, png)
-        self.unsaved = False
         self.set_status("Copied the finished image. It's ready to paste.")
 
 

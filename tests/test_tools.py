@@ -442,5 +442,199 @@ class ImageRedactTests(unittest.TestCase):
             self.assertFalse(inside("us-west-2"))
 
 
+    def test_rounded_covers_still_cover_the_whole_rectangle(self):
+        png = make_png(120, 80)
+        box = imageredact.cover_shape([20, 20, 100, 60, "AccountID"], (0, 0, 0, 1), radius=20)
+        out = imageredact.encode(png, [box], ".png")
+        for x, y in ((20, 20), (99, 20), (99, 59), (20, 59), (60, 40)):
+            self.assertEqual(pixel(out, x, y), (0, 0, 0), (x, y))
+        self.assertEqual(pixel(out, 2, 2), (255, 255, 255))   # the rounding is still visible
+
+    def test_text_without_pango(self):
+        old = imageredact._measure.get("pango")
+        imageredact._measure["pango"] = False   # how it runs on Windows
+        try:
+            w, h = imageredact.text_size("hello", 24)
+            self.assertGreater(w, 30)
+            self.assertGreater(h, 15)
+            shape = {"kind": "text", "x": 5, "y": 5, "text": "hello", "size": 24,
+                     "color": [1, 0, 0, 1], "width": 0, "fill": False}
+            out = imageredact.encode(make_png(120, 50), [shape], ".png")
+            reds = sum(1 for x in range(5, 80) for y in range(5, 35)
+                       if pixel(out, x, y)[0] > 200 and pixel(out, x, y)[1] < 80)
+            self.assertGreater(reds, 20)
+        finally:
+            if old is None:
+                imageredact._measure.pop("pango", None)
+            else:
+                imageredact._measure["pango"] = old
+
+    def test_opens_jpeg_with_pillow(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+        folder = tempfile.mkdtemp(prefix="awskit-img-")
+        try:
+            path = os.path.join(folder, "photo.jpg")
+            Image.new("RGB", (40, 30), (200, 10, 10)).save(path, "JPEG")
+            png = imageredact.load_image_bytes(path)
+            self.assertTrue(png.startswith(b"\x89PNG"))
+            self.assertEqual(imageredact.surface_from_png(png).get_width(), 40)
+        finally:
+            shutil.rmtree(folder)
+
+    def test_windows_ocr_output_and_word_level_boxes(self):
+        sample = ("0\t10\t20\t160\t24\tAccount:\n"
+                  "0\t180\t20\t240\t24\t123456789012\n"
+                  "1\t10\t60\t700\t24\tarn:aws:iam::123456789012:user/jane\n")
+        words = imageredact.parse_windows_ocr(sample, 2.0, 0)
+        self.assertEqual([w.text for w in words][:2], ["Account:", "123456789012"])
+        self.assertEqual((words[1].left, words[1].width), (90.0, 120.0))
+        boxes = imageredact.find_boxes([words], redact.Options(), (600, 100))
+        acct = [b for b in boxes if b[4] == "AccountID"]
+        self.assertEqual(len(acct), 2)
+        # Without character boxes the ARN's account ID is estimated, with a wider margin.
+        arn = max(acct, key=lambda b: b[1])
+        cw = 350 / 35
+        self.assertLessEqual(arn[0], 5 + 13 * cw)
+        self.assertGreaterEqual(arn[2], 5 + 25 * cw)
+
+    def test_powershell_errors_are_readable(self):
+        clixml = ('#< CLIXML\n<Objs Version="1.1.0.1"><S S="Error">Add-Type : Cannot add type._x000D__x000A_</S>'
+                  '<S S="Error">At line:4 char:1_x000D__x000A_</S><S S="Error">+ Add-Type x_x000D__x000A_</S></Objs>')
+        self.assertEqual(imageredact.powershell_error(clixml), "Add-Type : Cannot add type.")
+
+
+@unittest.skipIf(imageredact is None, "pycairo not installed")
+class ImageEditorTests(unittest.TestCase):
+    def setUp(self):
+        from awskit import imageedit
+        self.folder = tempfile.mkdtemp(prefix="awskit-edit-")
+        self.ed = imageedit.Editor()
+        self.ed.load(make_png(400, 300), os.path.join(self.folder, "shot.png"))
+
+    def tearDown(self):
+        shutil.rmtree(self.folder)
+
+    def draw(self, tool, a, b):
+        self.ed.set_tool(tool)
+        self.ed.drag_begin(*a, 1.0)
+        self.ed.drag_update(*b, False, 1.0)
+        return self.ed.drag_end(1.0)
+
+    def test_draw_move_resize_undo(self):
+        ed = self.ed
+        self.draw("cover", (10, 10), (110, 60))
+        self.assertEqual(ed.shapes[-1]["kind"], "cover")
+        self.assertTrue(ed.unsaved)
+        self.draw("select", (50, 30), (70, 40))          # move it by 20, 10
+        self.assertEqual((ed.shapes[-1]["x1"], ed.shapes[-1]["y1"]), (30, 20))
+        self.draw("select", (130, 70), (150, 90))        # drag the bottom right corner
+        self.assertEqual((ed.shapes[-1]["x2"], ed.shapes[-1]["y2"]), (150, 90))
+        ed.undo()
+        self.assertEqual((ed.shapes[-1]["x2"], ed.shapes[-1]["y2"]), (130, 70))
+        ed.undo()
+        ed.undo()
+        self.assertEqual(ed.shapes, [])
+        ed.redo()
+        self.assertEqual(len(ed.shapes), 1)
+
+    def test_text_request_and_commit(self):
+        request = self.draw("text", (40, 40), (40, 40))
+        self.assertEqual(request, ("new", (40, 40)))
+        self.assertTrue(self.ed.commit_text(request, "hello"))
+        self.assertEqual(self.ed.shapes[-1]["text"], "hello")
+
+    def test_corners_follow_on_detected_boxes_only(self):
+        ed = self.ed
+        ed.shapes = [imageredact.cover_shape([10, 10, 50, 30, "Email"], (0, 0, 0, 1), auto=True)]
+        self.draw("cover", (100, 100), (200, 150))       # one drawn by hand
+        ed.set_tool("cover")
+        self.assertTrue(ed.set_style(corners=9))
+        self.assertEqual(ed.shapes[0]["radius"], 9.0)
+        self.assertEqual(ed.shapes[1]["radius"], 0)
+        self.assertEqual(ed.cfg["corners"], 9)
+        self.draw("cover", (220, 100), (300, 150))
+        self.assertEqual(ed.shapes[-1]["radius"], 9)
+        ed.selected = ed.shapes[1]
+        ed.set_style(corners=4)
+        self.assertEqual(ed.shapes[1]["radius"], 4.0)
+        self.assertEqual(ed.style()["corners"], 4.0)
+
+    def test_rename_and_move_before_and_after_saving(self):
+        ed = self.ed
+        self.assertEqual(ed.name, "shot-redacted.png")
+        self.assertEqual(ed.rename("shared").kind, "done")
+        self.assertEqual(ed.target(), os.path.join(self.folder, "shared.png"))
+        plan = ed.plan_save()
+        self.assertEqual(ed.write(plan.dest).kind, "done")
+        self.assertTrue(os.path.exists(os.path.join(self.folder, "shared.png")))
+        self.assertEqual(ed.rename("final.jpg").kind, "done")
+        self.assertTrue(os.path.exists(os.path.join(self.folder, "final.jpg")))
+        other = os.path.join(self.folder, "other")
+        os.makedirs(other)
+        open(os.path.join(other, "final.jpg"), "wb").close()
+        ask = ed.move_to(other)
+        self.assertEqual(ask.kind, "ask")                 # something's already there
+        self.assertEqual(ed.relocate(ask.dest, ask.message).kind, "done")
+        self.assertEqual(ed.saved_path, os.path.join(other, "final.jpg"))
+        self.assertFalse(os.path.exists(os.path.join(self.folder, "final.jpg")))
+        self.assertIn(other, ed.cfg["recent_folders"])
+
+
+class WindowsSupportTests(unittest.TestCase):
+    """The Windows-only pieces that can be checked on any system."""
+
+    def test_scheduled_task_is_valid_xml(self):
+        import xml.etree.ElementTree as ET
+        from awskit import cli
+        xml = cli.windows_task_xml(r"C:\Users\a b\AppData\Local\AWSKit\venv\Scripts\pythonw.exe",
+                                   '"C:\\x\\awskit.pyw" sweep --notify --quiet --profile "R&D"', "7:05")
+        root = ET.fromstring(xml.split("?>", 1)[1])
+        ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+        self.assertEqual(root.find(".//t:StartBoundary", ns).text, "2026-01-01T07:05:00")
+        self.assertEqual(root.find(".//t:StartWhenAvailable", ns).text, "true")
+        self.assertEqual(root.find(".//t:LogonType", ns).text, "InteractiveToken")
+        self.assertIn('--profile "R&D"', root.find(".//t:Arguments", ns).text)
+        self.assertTrue(root.find(".//t:Command", ns).text.endswith("pythonw.exe"))
+
+    def test_powershell_hook_and_setup_lines(self):
+        from awskit import profiles
+        hook = profiles.shell_hook("powershell")
+        self.assertIn("function global:awsp", hook)
+        self.assertIn("APPDATA", hook)
+        self.assertEqual(profiles.shell_hook("pwsh"), hook)
+        self.assertEqual(profiles.shell_setup("powershell"),
+                         ("awskit shell-init powershell | Out-String | Invoke-Expression", "$PROFILE"))
+        self.assertEqual(profiles.shell_setup("bash"), ('eval "$(awskit shell-init bash)"', "~/.bashrc"))
+        self.assertEqual(profiles.shell_setup("fish")[0], "awskit shell-init fish | source")
+        with self.assertRaises(ValueError):
+            profiles.shell_hook("tcsh")
+
+    def test_shell_init_command_takes_powershell(self):
+        import subprocess
+        r = subprocess.run([sys.executable, "-m", "awskit", "shell-init", "powershell"],
+                           capture_output=True, text=True, cwd=ROOT,
+                           env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("function global:__awskit_sync", r.stdout)
+
+    def test_windows_launcher_needs_an_install(self):
+        from awskit import cli
+        self.assertIsNone(cli.windows_launcher())   # a plain checkout isn't an install
+
+    def test_installer_scripts_are_ascii_with_windows_line_endings(self):
+        # git gives these Windows line endings on checkout and in GitHub's Download ZIP,
+        # because of .gitattributes. A patch applied with git apply can leave them plain.
+        rules = (ROOT / ".gitattributes").read_text()
+        self.assertIn("*.cmd text eol=crlf", rules)
+        self.assertIn("*.ps1 text eol=crlf", rules)
+        for name in ("install-windows.cmd", "windows/install.ps1", "windows/uninstall.ps1"):
+            data = (ROOT / name).read_bytes()
+            data.decode("ascii")                     # Windows PowerShell 5.1 reads these as ANSI
+            self.assertNotIn(b"\r\r", data, name)
+
+
 if __name__ == "__main__":
     unittest.main()

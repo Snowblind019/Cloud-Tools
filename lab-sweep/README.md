@@ -15,7 +15,7 @@ Labs leave things behind. A NAT gateway or an Elastic IP is easy to forget, and 
 1. **Scan.** Reads every enabled region in each account you pick and lists anything that bills by the hour or month. Scanning only reads.
 2. **Review.** Each row shows the account, region, type, ID, name, state, a rough monthly cost, how old it is, and whether teardown can delete it. Rows sort by cost, most expensive first.
 3. **Tear down.** Tick what you want gone, press **Delete ticked**, and type `delete` to confirm. It deletes things in a safe order and shows the result of each one.
-4. **Check daily.** Optional. A systemd user timer runs a scan every evening and notifies you if anything is still costing money.
+4. **Check daily.** Optional. A systemd user timer, or a scheduled task on Windows, runs a scan every evening and notifies you if anything is still costing money.
 
 ## What it finds
 
@@ -117,7 +117,7 @@ Turn it on from **Settings** (pick a time and press **Turn on**) or with:
 awskit sweep --install-timer 21:00
 ```
 
-That writes two systemd user units, `~/.config/systemd/user/awskit-sweep.service` and `awskit-sweep.timer`, and enables the timer. Every day at that time it runs `awskit sweep --notify --quiet`, which:
+That writes two systemd user units, `~/.config/systemd/user/awskit-sweep.service` and `awskit-sweep.timer`, and enables the timer. On Windows it adds a task called **AWS Kit Lab Sweep** to Task Scheduler instead, for your user only, which also runs a missed check once the PC is back on. Every day at that time it runs `awskit sweep --notify --quiet`, which:
 
 - sends a desktop notification listing the five most expensive items, if the estimated monthly total is above `notify_threshold` (default $1) or anything usage-based is running
 - marks the notification urgent above $20 a month

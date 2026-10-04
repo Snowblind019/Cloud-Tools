@@ -1,6 +1,6 @@
 # Cloud Tools
 
-![Cloud](https://img.shields.io/badge/Cloud-AWS-FF9900) ![IaC](https://img.shields.io/badge/IaC-Terraform-7B42BC) ![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![GTK](https://img.shields.io/badge/GTK-4-4A86CF) ![Platform](https://img.shields.io/badge/Platform-Linux-FCC624) [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
+![Cloud](https://img.shields.io/badge/Cloud-AWS-FF9900) ![IaC](https://img.shields.io/badge/IaC-Terraform-7B42BC) ![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![GTK](https://img.shields.io/badge/GTK-4-4A86CF) ![Platform](https://img.shields.io/badge/Platform-Linux-FCC624) ![Windows](https://img.shields.io/badge/Platform-Windows-0078D4) [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 
 These are small tools I made for my own AWS and Terraform work on Fedora. Each one started from something that kept slowing me down while working on my [aws-platform](https://github.com/Snowblind019/aws-platform) projects and lab accounts: redacting output and screenshots before asking for help, leftover resources costing money, chasing down AccessDenied errors, reading long Terraform plans, and keeping track of which AWS account I'm in.
 
@@ -17,7 +17,7 @@ I built these with AI. I used Claude to help me brainstorm the ideas, plan how e
 | Tool | What it does | Why I made it |
 |---|---|---|
 | [**PII Redact**](pii-redact/) | Swaps account IDs, keys, ARNs, emails and other identifying info for `[Redacted]` in Terraform, AWS CLI or any other output | Redacting output by hand every time I needed help troubleshooting got tedious |
-| [**Image Redact**](image-redact/) | Reads the text in a screenshot and covers the same things with solid boxes, with drawing tools to fix it up, and rename and move built in | I was covering things in screenshots by hand in Gradia every time I shared one |
+| [**Image Redact**](image-redact/) | Reads the text in a screenshot and covers the same things with solid boxes, with drawing tools to fix it up, and rename and move built in. | I was covering things in screenshots by hand in Gradia every time I shared one |
 | [**Lab Sweep**](lab-sweep/) | Finds anything still costing money in every region across your accounts, and tears it down after you confirm | Forgotten NAT gateways and Elastic IPs from labs keep billing, and the old lab accounts from my previous org needed cleaning up |
 | [**Exposure Audit**](exposure-audit/) | Looks for things open to the internet or missing basic protection, like open security groups, public buckets and snapshots, and IMDSv1 | I wanted a small scanner I wrote and understand, like a mini Prowler |
 | [**CloudTrail**](cloudtrail/) | Shows who did what and when from CloudTrail event history, and explains AccessDenied errors | Debugging permission errors in my own builds meant digging through raw CloudTrail events |
@@ -44,6 +44,7 @@ cd cloud-tools
 |---|---|
 | Fedora | `python3-boto3 python3-gobject gtk4 wl-clipboard tesseract tesseract-langpack-eng` |
 | Debian / Ubuntu | `python3-boto3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 wl-clipboard tesseract-ocr` |
+| Windows | Nothing. `install-windows.cmd` sets everything up for your user. |
 | Arch | `python-boto3 python-gobject python-cairo gtk4 wl-clipboard tesseract tesseract-data-eng` |
 
 On X11, use `xclip` instead of `wl-clipboard`. PII Redact, Image Redact, Plan Check and Policy Check don't need boto3. Tesseract is only for Image Redact finding text by itself.
@@ -51,6 +52,10 @@ On X11, use `xclip` instead of `wl-clipboard`. PII Redact, Image Redact, Plan Ch
 Everything installs into your home folder: the `awskit` and `pii-redact` commands in `~/.local/bin`, and launcher entries for **AWS Kit**, **PII Redact**, **PII Redact Settings**, **Image Redact** and **AWS Profile Picker**. Image Redact also shows up under Open With for images. To update, run `git pull && ./install.sh`. To remove it all, run `awskit uninstall`.
 
 If you had the standalone pii-redact installed before, your settings carry over and the old launcher entries are cleaned up.
+
+### Windows
+
+All of AWS Kit runs on Windows 10 and 11 too, natively, with the same window and all eight tools. Double-click `install-windows.cmd`. It installs for your user only, without admin rights, and adds an AWS Kit folder to the Start menu. [Windows](awskit/README.md#windows) in AWS Kit's README has the details.
 
 ### WSL
 
@@ -90,10 +95,12 @@ The quickest way to use these is from keybinds: one for the PII Redact paste win
 cloud-tools/
 ├── README.md            this file
 ├── install.sh           installs AWS Kit with all eight tools
+├── install-windows.cmd  installs AWS Kit on Windows, no admin needed
 ├── LICENSE
 ├── awskit/              the shared app: window, commands, installer, keybinds
 ├── pii-redact/          redact account IDs, keys and personal info from output
 ├── image-redact/        cover the same things in screenshots, with drawing tools
+├── windows/             the Windows installer and uninstaller
 ├── lab-sweep/           cost watchdog and teardown
 ├── exposure-audit/      public access and missing protection checks
 ├── cloudtrail/          who did what, from CloudTrail
@@ -105,7 +112,7 @@ cloud-tools/
 
 ## Status
 
-PII Redact gives the same output it did as a standalone tool, checked against its sample file. Image Redact has been tested on light and dark screenshots of that same sample, with tesseract 5, and in the window. Its clipboard on WSL hasn't been tried on a real Windows machine yet. The AWS tools have been tested against [moto](https://github.com/getmoto/moto), which fakes AWS locally, and in the window with test data. That's what the screenshots show. They haven't been run against a real account yet, so do a dry run before the first real teardown.
+PII Redact gives the same output it did as a standalone tool, checked against its sample file. Image Redact has been tested on light and dark screenshots of that same sample, with tesseract 5, in its Linux window. The Windows version was run under Wine, with a real Windows build of Python 3.14 and the Windows GTK 4 bundle the installer uses: every page of the main window, the PII Redact, Image Redact and profile picker windows, and the commands all ran. The installer, Windows OCR, toasts, Task Scheduler and the Windows clipboard haven't been tried on a real Windows machine yet. The PowerShell scripts were checked with PowerShell 7, and the PowerShell profile hook was run there.
 
 To run the tests:
 

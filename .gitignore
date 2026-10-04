@@ -6,3 +6,6 @@ __pycache__/
 *.tfstate
 *.tfstate.*
 .terraform/
+
+# Windows download markers that show up as files when copying into WSL
+*:Zone.Identifier

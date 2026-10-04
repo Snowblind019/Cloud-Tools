@@ -42,7 +42,13 @@ eval "$(awskit shell-init zsh)"
 awskit shell-init fish | source
 ```
 
-In bash the hook runs from `PROMPT_COMMAND`, in zsh from a `precmd` hook, and in fish on the `fish_prompt` event. It only reads one small file, so it doesn't slow your prompt down. Run `awskit shell-init bash` on its own to see exactly what gets added.
+**PowerShell**, on Windows or Linux, in your profile (`notepad $PROFILE` on Windows):
+
+```powershell
+awskit shell-init powershell | Out-String | Invoke-Expression
+```
+
+In bash the hook runs from `PROMPT_COMMAND`, in zsh from a `precmd` hook, in fish on the `fish_prompt` event, and in PowerShell from the `prompt` function. On Windows, the picked profile is saved in `%APPDATA%\awskit\current-profile`. It only reads one small file, so it doesn't slow your prompt down. Run `awskit shell-init bash` on its own to see exactly what gets added.
 
 The Profiles page also shows the right line for your shell, with a Copy button.
 

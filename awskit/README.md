@@ -37,7 +37,7 @@ sudo dnf install python3-boto3 python3-gobject gtk4 wl-clipboard
 
 PII Redact, Image Redact, Plan Check and Policy Check work offline and don't need boto3. On Debian and Ubuntu, Image Redact also needs `python3-gi-cairo`. Without GTK, everything still works from the terminal.
 
-On WSL, see [WSL](../README.md#wsl) in the main README for what works differently.
+On Windows, see [Windows](#windows) below. On WSL, see [WSL](../README.md#wsl) in the main README for what works differently.
 
 The installer:
 
@@ -218,7 +218,7 @@ On GNOME Wayland, clip mode depends on wl-clipboard, which GNOME doesn't fully s
 | `awskit plan` | Plan Check, see [plan-check/](../plan-check/) |
 | `awskit policy` | Policy Check, see [policy-check/](../policy-check/) |
 | `awskit profile` | Profile picker, see [profiles/](../profiles/) |
-| `awskit shell-init bash` | Print the shell hook for `awsp` (bash, zsh or fish) |
+| `awskit shell-init bash` | Print the shell hook for `awsp` (bash, zsh, fish or powershell) |
 | `awskit install` | Install to `~/.local` (what `install.sh` runs) |
 | `awskit uninstall` | Remove it |
 | `awskit --version` | Print the version |
@@ -288,6 +288,82 @@ Everything lives in `~/.config/awskit/`:
 | `timer_profiles` | `[]` | Profiles the daily check covers. Empty means the current one. |
 | `sns_topic` | `""` | SNS topic ARN for daily check summaries |
 
+## Windows
+
+AWS Kit runs on Windows 10 and 11 the same way it does on Linux: the same window, all eight tools, and the same commands. It's the same code, running on GTK 4 for Windows.
+
+### Install
+
+1. Download the repo: **Code**, then **Download ZIP** on GitHub, and extract it. Or `git clone` it.
+2. Double-click `install-windows.cmd` in that folder. If Windows says it protected your PC, click **More info**, then **Run anyway**. That's because the file came from the internet.
+3. It asks if you want a desktop shortcut, and if you want to open AWS Kit when it's done.
+
+No admin rights needed. Everything goes in `%LOCALAPPDATA%\AWSKit`, for your user only. The first install downloads about 330 MB and takes a few minutes. The installer:
+
+- uses your Python 3.14 if you have it, or installs Python 3.14 from python.org just for AWS Kit, in that folder. It has to be 3.14, since that's what the Windows build of GTK's Python bindings is made for.
+- downloads GTK 4 for Windows from the [gvsbuild](https://github.com/wingtk/gvsbuild) project and unpacks only what AWS Kit needs, about 180 MB
+- installs PyGObject, pycairo, boto3 and Pillow into its own environment there, so it doesn't touch any other Python setup
+- adds an **AWS Kit** folder to the Start menu with **AWS Kit**, **PII Redact**, **Image Redact** and **AWS Profile Picker**
+- adds Image Redact to **Open with** for PNG, JPEG, BMP and WebP files, without changing what opens them by default
+- adds `awskit`, `pii-redact` and `awsp` to your PATH for new terminals
+- adds **AWS Kit** to Settings, Apps, Installed apps, which is where you remove it
+
+To update, download the repo again and run `install-windows.cmd` again. It only downloads GTK again when the GTK version changes. Your settings stay.
+
+If your network uses a proxy, set it in PowerShell and run the installer from that same window:
+
+```powershell
+$env:HTTPS_PROXY = "http://proxy.example.com:8080"
+powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1
+```
+
+If GitHub downloads are blocked, download `GTK4_Gvsbuild_2026.8.0_x64.zip` from the gvsbuild releases page another way and pass it in with `-GtkZip C:\path\to\it.zip`. The installer also takes `-Desktop` to add the desktop shortcut without asking, `-NoPath` to leave your PATH alone, and `-Quiet` to not ask anything.
+
+### What's different on Windows
+
+| Thing | On Linux | On Windows |
+|---|---|---|
+| Settings | `~/.config/awskit` | `%APPDATA%\awskit` |
+| AWS profiles | `~/.aws` | `%USERPROFILE%\.aws`, which is where the AWS CLI keeps them on Windows too |
+| `awsp` and the prompt helper | bash, zsh or fish hook | PowerShell hook, see below |
+| Lab Sweep daily check | systemd user timer | Task Scheduler, as **AWS Kit Lab Sweep**, for your user only |
+| Notifications | `notify-send` | Windows notifications. They show under Windows PowerShell's name. |
+| Clipboard | `wl-copy` or `xclip` | The Windows clipboard |
+| Image Redact text detection | tesseract | The OCR built into Windows, or Tesseract if it's installed |
+| Installing | `./install.sh` | `install-windows.cmd` |
+
+SSO sign-in from the Profiles page needs the AWS CLI v2, same as on Linux. Plan Check needs `terraform` or `tofu` on your PATH to run plans by itself.
+
+### awsp in PowerShell
+
+Open your PowerShell profile with `notepad $PROFILE` (say yes if it asks to create the file) and add this line:
+
+```powershell
+awskit shell-init powershell | Out-String | Invoke-Expression
+```
+
+Open a new PowerShell window. Then `awsp` opens the picker, `awsp NAME` switches, and every open PowerShell window follows at its next prompt. `__awskit_ps1` returns `(aws:NAME) ` for your own prompt function, and Starship and Oh My Posh show the profile with their aws module.
+
+If PowerShell says running scripts is disabled, run this once. It only applies to your user:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+### Removing it
+
+Settings, Apps, Installed apps, **AWS Kit**, **Uninstall**. That removes the Start menu folder, the Open with entry, the PATH entry, the Lab Sweep scheduled task, the Python it installed, and `%LOCALAPPDATA%\AWSKit`. Your settings in `%APPDATA%\awskit` and your profiles in `.aws` stay.
+
+### Troubleshooting on Windows
+
+| Problem | Fix |
+|---|---|
+| The installer says running scripts is disabled or blocked by policy | Your organization blocks PowerShell scripts. Ask IT, since the installer and the PowerShell hook both need them. |
+| `pip couldn't install` | Usually a proxy. See the proxy example above. |
+| `GTK did not load` at the end of the install | The message above it says why. Running `install-windows.cmd` again redoes anything missing. |
+| The window comes up blank or flickers, often over Remote Desktop or in a VM | GTK couldn't use the GPU there. Set `GSK_RENDERER=cairo` as a user environment variable, then open AWS Kit again. |
+| Something went wrong in Image Redact | Details are in `%APPDATA%\awskit\image-redact.log` |
+
 ## How the code is laid out
 
 ```text
@@ -307,7 +383,7 @@ pii-redact/                one folder per tool
 └── examples/              something to try it on
 ```
 
-Every tool folder follows the same pattern: one file with the logic, which has no GTK in it and is what the commands use, and one `_page.py` file for the window.
+Every tool folder follows the same pattern: one file with the logic, which has no GTK in it and is what the commands use, and one `_page.py` file for the window. Image Redact has two more: `imageedit.py`, the editor without a window, and `image_tk.py`, a simpler tkinter window it falls back to when GTK isn't set up. Both windows drive `imageedit.py`, so they behave the same. On Windows the GTK window is used, same as on Linux.
 
 The tool folders sit next to `awskit/` instead of inside it so that each tool is easy to find on its own. To make that work, `awskit/__init__.py` adds them to the package's search path, so `pii-redact/redact.py` loads as `awskit.redact` and can use `common.py` and `widgets.py` like any file inside the package. The installer copies the folders the same way, side by side, into `~/.local/share/awskit/`.
 

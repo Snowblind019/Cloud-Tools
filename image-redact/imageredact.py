@@ -3,7 +3,9 @@ and covers it with solid boxes, using the same rules and settings as PII Redact.
 
 This file has the text detection, the shapes and how they're drawn, saving, renaming and
 moving files, and the command line. It has no GTK in it, so the commands work without a
-window. The editor is in image_page.py. Run `awskit image --help` for every option.
+window and the same code runs on Windows. The editor logic is in imageedit.py, the GTK
+window in image_page.py and the Windows window in image_tk.py. Run `awskit image --help`
+for every option.
 """
 from __future__ import annotations
 
@@ -26,9 +28,12 @@ from pathlib import Path
 
 from . import redact
 from .common import (CONFIG_DIR, ClipboardError, is_wsl, notify, read_clipboard_image,
-                     write_clipboard_image)
+                     windows_tool, write_clipboard_image)
 
 CONFIG_FILE = CONFIG_DIR / "image.json"
+WINDOWS = os.name == "nt"
+# Keeps tesseract and PowerShell from flashing a console window on Windows.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 SAVE_TYPES = (".png", ".jpg", ".jpeg")
 OPEN_TYPES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff")
@@ -43,6 +48,8 @@ DEFAULT_CONFIG = {
     "width": 4,
     "fill": False,
     "text_size": 28,
+    # Corner rounding for Cover and Box, in pixels. Detected boxes use it too.
+    "corners": 0,
     # Folders you saved or moved to lately, newest first.
     "recent_folders": [],
     # Tesseract language codes, like "eng" or "eng+ron".
@@ -128,11 +135,26 @@ def load_image_bytes(path: str) -> bytes:
         surface_from_png(data)  # make sure cairo can read it
         return data
     try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        Image = None
+    if Image is not None:
+        try:
+            with Image.open(path) as img:
+                img = ImageOps.exif_transpose(img)
+                if img.mode not in ("RGB", "RGBA"):
+                    img = img.convert("RGBA")
+                buf = io.BytesIO()
+                img.save(buf, "PNG", compress_level=1)
+            return buf.getvalue()
+        except (OSError, ValueError) as exc:
+            raise ImageError(f"Couldn't read {os.path.basename(path)} as an image: {exc}") from exc
+    try:
         import gi
         gi.require_version("GdkPixbuf", "2.0")
         from gi.repository import GdkPixbuf, GLib
     except (ImportError, ValueError) as exc:
-        raise ImageError("Only PNG files can be opened without GdkPixbuf.") from exc
+        raise ImageError("Only PNG files can be opened without Pillow or GdkPixbuf.") from exc
     try:
         pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
         pixbuf = pixbuf.apply_embedded_orientation() or pixbuf
@@ -159,23 +181,55 @@ class OcrError(Exception):
     pass
 
 
-INSTALL_HINT = ("Text detection needs tesseract.\n"
-                "Fedora:        sudo dnf install tesseract tesseract-langpack-eng\n"
-                "Debian/Ubuntu: sudo apt install tesseract-ocr\n"
-                "Arch:          sudo pacman -S tesseract tesseract-data-eng")
+if WINDOWS:
+    INSTALL_HINT = ("Text detection needs Windows PowerShell, which comes with Windows 10 and 11, "
+                    "or Tesseract.")
+else:
+    INSTALL_HINT = ("Text detection needs tesseract.\n"
+                    "Fedora:        sudo dnf install tesseract tesseract-langpack-eng\n"
+                    "Debian/Ubuntu: sudo apt install tesseract-ocr\n"
+                    "Arch:          sudo pacman -S tesseract tesseract-data-eng")
 
 
 def tesseract_path():
-    return shutil.which("tesseract")
+    found = shutil.which("tesseract")
+    if found or not WINDOWS:
+        return found
+    # The Windows installers don't add tesseract to PATH by default.
+    for base in (os.environ.get("LOCALAPPDATA", ""), os.environ.get("ProgramFiles", ""),
+                 os.environ.get("ProgramFiles(x86)", "")):
+        for sub in (r"Programs\Tesseract-OCR", "Tesseract-OCR"):
+            exe = os.path.join(base, sub, "tesseract.exe")
+            if base and os.path.isfile(exe):
+                return exe
+    return None
+
+
+def windows_ocr_available() -> bool:
+    """Windows 10 and 11 have OCR built in, reached here through Windows PowerShell."""
+    return WINDOWS and windows_tool("powershell.exe") is not None
+
+
+def ocr_engine():
+    """'tesseract', 'windows' or None. Tesseract wins because it gives a box for every
+    character, which places boxes more precisely inside long words like ARNs."""
+    if tesseract_path():
+        return "tesseract"
+    if windows_ocr_available():
+        return "windows"
+    return None
 
 
 def ocr_status() -> tuple:
-    """(True, version line) when tesseract is ready, otherwise (False, how to install it)."""
+    """(True, what reads the text) when text detection is ready, otherwise (False, why)."""
     exe = tesseract_path()
     if not exe:
+        if windows_ocr_available():
+            return True, "Windows OCR"
         return False, INSTALL_HINT
     try:
-        r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10)
+        r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10,
+                           creationflags=NO_WINDOW)
     except (OSError, subprocess.SubprocessError) as exc:
         return False, f"tesseract is installed but won't run: {exc}"
     first = (r.stdout or r.stderr).strip().splitlines()
@@ -187,7 +241,8 @@ def ocr_languages() -> list:
     if not exe:
         return []
     try:
-        r = subprocess.run([exe, "--list-langs"], capture_output=True, text=True, timeout=10)
+        r = subprocess.run([exe, "--list-langs"], capture_output=True, text=True, timeout=10,
+                           creationflags=NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return []
     lines = (r.stdout or r.stderr).strip().splitlines()
@@ -356,7 +411,7 @@ def _run_pass(exe, surface, scale, invert, language, folder, results, index):
         _prepare(surface, scale, invert, path)
         r = subprocess.run([exe, path, "stdout", "-l", language, "--psm", "3",
                             "--dpi", str(int(96 * scale)), "-c", "hocr_char_boxes=1", "hocr"],
-                           capture_output=True, timeout=180)
+                           capture_output=True, timeout=180, creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired:
         results[index] = OcrError("Text detection took too long and was stopped.")
         return
@@ -375,21 +430,141 @@ def _run_pass(exe, surface, scale, invert, language, folder, results, index):
     results[index] = parse_hocr(r.stdout.decode("utf-8", "replace"), scale, index)
 
 
+# Windows.Media.Ocr through Windows PowerShell 5.1, which every Windows 10 and 11 machine
+# has. No install, no admin, and nothing to download. It gives a box per word, not per
+# character. The image path comes in through an environment variable, and the words go
+# out as tab-separated lines: line number, x, y, width, height, text.
+WINDOWS_OCR_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
+$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
+$null = [Windows.Foundation.IAsyncOperation`1, Windows.Foundation, ContentType = WindowsRuntime]
+$null = [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Foundation, ContentType = WindowsRuntime]
+$null = [Windows.Storage.Streams.RandomAccessStream, Windows.Storage.Streams, ContentType = WindowsRuntime]
+$awaiter = [WindowsRuntimeSystemExtensions].GetMember('GetAwaiter').Where({
+    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' }, 'First')[0]
+function Await($op, [Type]$type) { $awaiter.MakeGenericMethod($type).Invoke($null, @($op)).GetResult() }
+$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+if ($null -eq $engine) {
+    [Console]::Error.WriteLine('NOLANG Windows has no OCR language installed.')
+    exit 3
+}
+$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($env:AWSKIT_OCR_IMAGE)) ([Windows.Storage.StorageFile])
+$stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+$result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+$inv = [Globalization.CultureInfo]::InvariantCulture
+$out = New-Object System.Text.StringBuilder
+$n = 0
+foreach ($line in $result.Lines) {
+    foreach ($word in $line.Words) {
+        $r = $word.BoundingRect
+        [void]$out.Append($n).Append("`t").Append($r.X.ToString($inv)).Append("`t").Append($r.Y.ToString($inv))
+        [void]$out.Append("`t").Append($r.Width.ToString($inv)).Append("`t").Append($r.Height.ToString($inv))
+        [void]$out.Append("`t").Append($word.Text).Append("`n")
+    }
+    $n++
+}
+$stream.Dispose()
+[Console]::Out.Write($out.ToString())
+"""
+# OcrEngine.MaxImageDimension. Bigger images make RecognizeAsync fail.
+WINDOWS_OCR_MAX = 2600
+
+
+def parse_windows_ocr(text: str, scale: float, tag) -> list:
+    words = []
+    for row in text.splitlines():
+        cols = row.split("\t")
+        if len(cols) < 6 or not cols[5].strip():
+            continue
+        try:
+            line = int(cols[0])
+            x, y, w, h = (float(c) / scale for c in cols[1:5])
+        except ValueError:
+            continue
+        words.append(Word(cols[5].strip(), x, y, w, h, 90.0, (tag, line)))
+    return words
+
+
+def powershell_error(text: str) -> str:
+    """The useful line out of PowerShell's error output. Captured errors come wrapped in
+    CLIXML, with escapes like _x000A_, terminal colors, and the failing line quoted."""
+    if text.lstrip().startswith("#< CLIXML"):
+        import html
+        parts = re.findall(r'<S S="Error">(.*?)</S>', text, re.S)
+        text = "".join(html.unescape(x) for x in parts)
+        text = re.sub(r"_x([0-9A-Fa-f]{4})_", lambda m: chr(int(m.group(1), 16)), text)
+    text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+    lines = []
+    for line in text.splitlines():
+        line = re.sub(r"^\s*(\d+\s*)?\|\s?", "", line).strip()
+        if (not line or set(line) <= set("~ ") or line.startswith(("+", "At line:", "Line"))
+                or line.endswith(":")):
+            continue
+        lines.append(line)
+    return lines[-1] if lines else ""
+
+
+def _run_windows_pass(surface, scale, invert, folder, results, index):
+    import base64
+    path = os.path.join(folder, f"pass{index}.png")
+    ps = windows_tool("powershell.exe") or "powershell.exe"
+    encoded = base64.b64encode(WINDOWS_OCR_SCRIPT.encode("utf-16-le")).decode("ascii")
+    try:
+        _prepare(surface, scale, invert, path)
+        r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                            "-EncodedCommand", encoded],
+                           capture_output=True, timeout=180, creationflags=NO_WINDOW,
+                           env=dict(os.environ, AWSKIT_OCR_IMAGE=os.path.abspath(path)))
+    except subprocess.TimeoutExpired:
+        results[index] = OcrError("Text detection took too long and was stopped.")
+        return
+    except OSError as exc:
+        results[index] = OcrError(f"Couldn't run PowerShell for Windows OCR: {exc}")
+        return
+    err = r.stderr.decode("utf-8", "replace").strip()
+    if r.returncode != 0:
+        if "NOLANG" in err:
+            results[index] = OcrError(
+                "Windows has no OCR language installed. In Settings, go to Time & language, "
+                "then Language & region, open your language's options, and add Optical "
+                "character recognition.")
+        else:
+            results[index] = OcrError("Windows OCR failed: " + (powershell_error(err) or
+                                                                 f"exit code {r.returncode}"))
+        return
+    results[index] = parse_windows_ocr(r.stdout.decode("utf-8", "replace"), scale, index)
+
+
 def read_text(png: bytes, language: str = "eng") -> list:
     """Run OCR on an image. Returns one list of words per pass, in image pixels."""
     exe = tesseract_path()
-    if not exe:
+    engine = "tesseract" if exe else ("windows" if windows_ocr_available() else None)
+    if engine is None:
         raise OcrError(INSTALL_HINT)
     surface = surface_from_png(png)
     scale = ocr_scale(surface)
+    if engine == "windows":
+        biggest = max(surface.get_width(), surface.get_height())
+        scale = min(scale, WINDOWS_OCR_MAX / max(biggest, 1))
     plan = ocr_plan(surface)
     results = [None] * len(plan)
     # mkdtemp folders are private to you, and get removed with whatever was in them.
     folder = tempfile.mkdtemp(prefix="awskit-ocr-")
     try:
-        threads = [threading.Thread(target=_run_pass, daemon=True,
-                                    args=(exe, surface, scale, inv, language, folder, results, i))
-                   for i, inv in enumerate(plan)]
+        if engine == "windows":
+            threads = [threading.Thread(target=_run_windows_pass, daemon=True,
+                                        args=(surface, scale, inv, folder, results, i))
+                       for i, inv in enumerate(plan)]
+        else:
+            threads = [threading.Thread(target=_run_pass, daemon=True,
+                                        args=(exe, surface, scale, inv, language, folder,
+                                              results, i))
+                       for i, inv in enumerate(plan)]
         for t in threads:
             t.start()
         for t in threads:
@@ -519,31 +694,26 @@ def _span_boxes(s, e, label, placed, line_boxes):
         n = max(len(w.text), 1)
         cw = w.width / n
         cs, ce = max(s, ws) - ws, min(e, we) - ws
-        # Inside a word, character boxes say exactly where a match starts and ends. Without
-        # them it's estimated from the average character width. Whole-word edges get
-        # normal padding, edges inside a word a little less so neighbors stay readable.
-        if w.chars:
-            # Tesseract's character boxes can be off by a few pixels, so inside a word the
-            # edge moves out half a character. A neighbor that's punctuation, like the quote
-            # or colon around an ID, gets covered too, since hiding it gives nothing away.
-            x0, x1 = w.chars[cs][0], w.chars[ce - 1][1]
-            if cs > 0:
-                reach = cw * 0.5
-                if not w.text[cs - 1].isalnum():
-                    reach = min(max(x0 - w.chars[cs - 1][0], reach), cw * 1.5)
-                x0 -= reach
-            if ce < n:
-                reach = cw * 0.5
-                if not w.text[ce].isalnum():
-                    reach = min(max(w.chars[ce][1] - x1, reach), cw * 1.5)
-                x1 += reach
-            slack = 0.0
-        else:
-            x0 = w.left + cw * cs
-            x1 = w.left + cw * ce
-            slack = max(cw * 0.4, 1.5)
-        left = (x0, cs > 0, slack)
-        right = (x1, ce < n, slack)
+        # Inside a word, character boxes say where a match starts and ends. Tesseract gives
+        # them. Windows OCR only boxes whole words, so there they're estimated from the
+        # average character width, which is less exact, so the edges reach further.
+        # A neighbor that's punctuation, like the quote or colon around an ID, gets covered
+        # too, since hiding it gives nothing away. Whole-word edges get normal padding.
+        chars = w.chars or [(w.left + cw * i, w.left + cw * (i + 1)) for i in range(n)]
+        base = 0.5 if w.chars else 0.75
+        x0, x1 = chars[cs][0], chars[ce - 1][1]
+        if cs > 0:
+            reach = cw * base
+            if not w.text[cs - 1].isalnum():
+                reach = min(max(x0 - chars[cs - 1][0], reach), cw * 1.5)
+            x0 -= reach
+        if ce < n:
+            reach = cw * base
+            if not w.text[ce].isalnum():
+                reach = min(max(chars[ce][1] - x1, reach), cw * 1.5)
+            x1 += reach
+        left = (x0, cs > 0, 0.0)
+        right = (x1, ce < n, 0.0)
         box = per_line.get(w.line)
         if box:
             left = box[0] if box[0][0] <= x0 else left
@@ -659,15 +829,15 @@ def redaction_options():
 # =================================================================== shapes
 
 # Shapes are plain dicts so they copy easily for undo and save as JSON:
-#   cover, rect, oval, line, arrow: x1, y1, x2, y2
+#   cover, rect, oval, line, arrow: x1, y1, x2, y2 (cover and rect can have a radius)
 #   pen: points [[x, y], ...]
 #   text: x, y (top left), text, size
 # plus color [r, g, b, a], width, fill, and for detected boxes auto=True and a label.
 
-def cover_shape(box, color, auto=False):
+def cover_shape(box, color, auto=False, radius=0):
     x1, y1, x2, y2 = box[:4]
     shape = {"kind": "cover", "x1": x1, "y1": y1, "x2": x2, "y2": y2,
-             "color": list(color), "width": 0, "fill": True}
+             "color": list(color), "width": 0, "fill": True, "radius": radius}
     if auto:
         shape["auto"] = True
         shape["label"] = box[4] if len(box) > 4 else ""
@@ -685,12 +855,62 @@ def rect_of(shape) -> tuple:
 
 
 _measure = {}
+TEXT_FONT = "Segoe UI" if WINDOWS else "Sans"
+
+
+def have_pango() -> bool:
+    """Pango lays out text on Linux. On Windows it isn't there, so cairo draws text itself."""
+    if "pango" not in _measure:
+        ok = not os.environ.get("AWSKIT_NO_PANGO")
+        if ok:
+            try:
+                import gi
+                gi.require_version("Pango", "1.0")
+                gi.require_version("PangoCairo", "1.0")
+                from gi.repository import PangoCairo  # noqa: F401
+            except (ImportError, ValueError):
+                ok = False
+        _measure["pango"] = ok
+    return _measure["pango"]
+
+
+def _measure_cr():
+    if "cr" not in _measure:
+        cairo = _cairo()
+        _measure["cr"] = cairo.Context(cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1))
+    return _measure["cr"]
+
+
+def _toy_font(cr, size):
+    cairo = _cairo()
+    cr.select_font_face(TEXT_FONT, cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+    cr.set_font_size(max(size, 1))
 
 
 def text_size(text: str, size: float) -> tuple:
+    if not have_pango():
+        cr = _measure_cr()
+        _toy_font(cr, size)
+        ascent, descent = cr.font_extents()[:2]
+        return max(cr.text_extents(text or " ").x_advance, 1), max(ascent + descent, 1)
     layout = _text_layout(None, text, size)
     _, logical = layout.get_pixel_extents()
     return max(logical.width, 1), max(logical.height, 1)
+
+
+def draw_text(cr, x, y, text, size):
+    """Text with its top left corner at x, y."""
+    if not have_pango():
+        _toy_font(cr, size)
+        cr.move_to(x, y + cr.font_extents()[0])
+        cr.show_text(text or "")
+        cr.new_path()
+        return
+    from gi.repository import PangoCairo
+    layout = _text_layout(cr, text, size)
+    cr.move_to(x, y)
+    PangoCairo.show_layout(cr, layout)
+    cr.new_path()
 
 
 def _text_layout(cr, text, size):
@@ -699,10 +919,7 @@ def _text_layout(cr, text, size):
     gi.require_version("PangoCairo", "1.0")
     from gi.repository import Pango, PangoCairo
     if cr is None:
-        if "cr" not in _measure:
-            cairo = _cairo()
-            _measure["cr"] = cairo.Context(cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1))
-        cr = _measure["cr"]
+        cr = _measure_cr()
     layout = PangoCairo.create_layout(cr)
     desc = Pango.FontDescription.from_string("Sans Bold")
     desc.set_absolute_size(max(size, 1) * Pango.SCALE)
@@ -793,7 +1010,13 @@ def draw_shape(cr, shape, see_through=False):
     cr.set_line_join(cairo.LINE_JOIN_ROUND)
     if kind in ("cover", "rect"):
         x1, y1, x2, y2 = rect_of(shape)
-        cr.rectangle(x1, y1, x2 - x1, y2 - y1)
+        radius = float(shape.get("radius", 0) or 0)
+        if filled and radius > 0:
+            # Grow the box a little so its rounded corners still cover the corners of the
+            # original rectangle. Rounding never uncovers anything.
+            grow = min(radius, (x2 - x1) / 2, (y2 - y1) / 2) * 0.293
+            x1, y1, x2, y2 = x1 - grow, y1 - grow, x2 + grow, y2 + grow
+        rounded_rect(cr, x1, y1, x2 - x1, y2 - y1, radius)
         if filled:
             cr.fill()
         else:
@@ -845,11 +1068,20 @@ def draw_shape(cr, shape, see_through=False):
         cr.line_to(*pts[-1])
         cr.stroke()
     elif kind == "text":
-        from gi.repository import PangoCairo
-        layout = _text_layout(cr, shape["text"], shape["size"])
-        cr.move_to(shape["x"], shape["y"])
-        PangoCairo.show_layout(cr, layout)
-        cr.new_path()
+        draw_text(cr, shape["x"], shape["y"], shape["text"], shape["size"])
+
+
+def rounded_rect(cr, x, y, w, h, radius):
+    r = max(0.0, min(float(radius or 0), w / 2, h / 2))
+    if r <= 0:
+        cr.rectangle(x, y, w, h)
+        return
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
 
 
 def draw_shapes(cr, shapes, see_through=False):
@@ -884,6 +1116,15 @@ def encode(png: bytes, shapes, ext: str = ".png") -> bytes:
         surface = flatten(png, shapes, background=(1, 1, 1))
         buf = io.BytesIO()
         surface.write_to_png(buf)
+        try:
+            from PIL import Image
+        except ImportError:
+            Image = None
+        if Image is not None:
+            out = io.BytesIO()
+            with Image.open(io.BytesIO(buf.getvalue())) as img:
+                img.convert("RGB").save(out, "JPEG", quality=92)
+            return out.getvalue()
         import gi
         gi.require_version("GdkPixbuf", "2.0")
         from gi.repository import GdkPixbuf
@@ -902,7 +1143,32 @@ def encode(png: bytes, shapes, ext: str = ".png") -> bytes:
 
 # =================================================================== files
 
+def _windows_pictures():
+    """The real Pictures folder, which OneDrive or IT may have moved off the home folder."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [("a", wintypes.DWORD), ("b", wintypes.WORD), ("c", wintypes.WORD),
+                        ("d", ctypes.c_ubyte * 8)]
+        pictures = GUID(0x33E28130, 0x4E1E, 0x4676,
+                        (ctypes.c_ubyte * 8)(0x83, 0x5A, 0x98, 0x39, 0x5C, 0x3B, 0xC3, 0xBB))
+        out = ctypes.c_wchar_p()
+        shell32 = ctypes.windll.shell32
+        if shell32.SHGetKnownFolderPath(ctypes.byref(pictures), 0, None,
+                                        ctypes.byref(out)) == 0:
+            path = out.value
+            ctypes.windll.ole32.CoTaskMemFree(out)
+            return path
+    except (AttributeError, OSError):
+        pass
+    return None
+
+
 def pictures_folder() -> str:
+    if WINDOWS:
+        return _windows_pictures() or str(Path.home() / "Pictures")
     try:
         from gi.repository import GLib
         folder = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES)
@@ -1023,7 +1289,29 @@ def tell(message, title="Image Redact"):
         notify(title, message, icon="image-x-generic")
 
 
+def gtk_available() -> bool:
+    try:
+        import gi
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk  # noqa: F401
+    except (ImportError, ValueError):
+        return False
+    return True
+
+
+def use_tk() -> bool:
+    """The GTK window everywhere GTK is set up, which includes Windows after
+    install-windows.cmd. The tkinter window is the fallback when it isn't, and
+    AWSKIT_UI=tk opens it on purpose."""
+    if os.environ.get("AWSKIT_UI") == "tk":
+        return True
+    return WINDOWS and not gtk_available()
+
+
 def run_gui(path=None, paste=False):
+    if use_tk():
+        from .image_tk import main as tk_main
+        return tk_main(path, paste)
     from .app import main as gui_main
     return gui_main("image-window", initial_file=path, paste=paste)
 
@@ -1031,7 +1319,10 @@ def run_gui(path=None, paste=False):
 def cmd_check() -> int:
     ok, msg = ocr_status()
     print(("Text detection: " + msg) if ok else msg)
-    if ok:
+    if ok and ocr_engine() == "windows":
+        print("Windows OCR runs the first time you use it. If it says there's no OCR language, "
+              "add Optical character recognition to your language in Windows Settings.")
+    elif ok:
         langs = ocr_languages()
         want = load_config()["language"]
         missing = [x for x in want.split("+") if x not in langs]
@@ -1040,13 +1331,18 @@ def cmd_check() -> int:
             print(f"Missing language data for: {', '.join(missing)}")
             ok = False
     try:
-        import gi
-        gi.require_version("GdkPixbuf", "2.0")
-        from gi.repository import GdkPixbuf
-        names = sorted({f.get_name() for f in GdkPixbuf.Pixbuf.get_formats()})
-        print("Can open: " + ", ".join(names))
-    except (ImportError, ValueError):
-        print("GdkPixbuf is missing, so only PNG files can be opened.")
+        from PIL import Image, features  # noqa: F401
+        print("Can open: PNG, JPEG, BMP, GIF, TIFF" + (", WebP" if features.check("webp") else "")
+              + " (Pillow)")
+    except ImportError:
+        try:
+            import gi
+            gi.require_version("GdkPixbuf", "2.0")
+            from gi.repository import GdkPixbuf
+            names = sorted({f.get_name() for f in GdkPixbuf.Pixbuf.get_formats()})
+            print("Can open: " + ", ".join(names))
+        except (ImportError, ValueError):
+            print("Neither Pillow nor GdkPixbuf is installed, so only PNG files can be opened.")
     return 0 if ok else 1
 
 

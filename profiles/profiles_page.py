@@ -1,11 +1,20 @@
 """Profiles page and the small profile picker window."""
 from __future__ import annotations
 
+import os
+import sys
+
 from gi.repository import Gdk, GLib, Gtk, Pango
 
 from . import profiles
+from .common import CURRENT_PROFILE_FILE
 from .widgets import (Page, ResultTable, button, flash, hbox, label, margins, run_bg,
                       set_clipboard, spacer, string_dropdown, vbox)
+
+
+def short_home(path) -> str:
+    path, home = str(path), os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home + os.sep) else path
 
 
 class ProfilesView(Gtk.Box):
@@ -137,11 +146,11 @@ class ProfilesView(Gtk.Box):
 class ProfilesPage(Page):
     name = "profiles"
     title = "Profiles"
-    SHELLS = ["bash", "zsh", "fish"]
+    SHELLS = ["powershell"] if sys.platform == "win32" else ["bash", "zsh", "fish", "powershell"]
 
     def __init__(self, win):
         super().__init__(win, "Pick which AWS profile your terminals and this window use. The "
-                         "pick is saved to ~/.config/awskit/current-profile, and the shell hook "
+                         f"pick is saved to {short_home(CURRENT_PROFILE_FILE)}, and the shell hook "
                          "picks it up at the next prompt.")
         self.view = ProfilesView(win)
         self.view.set_vexpand(True)
@@ -162,18 +171,22 @@ class ProfilesPage(Page):
         self.copy_btn = button("Copy", self.copy_snippet)
         row.append(self.copy_btn)
         setup.append(row)
-        setup.append(label("To show the profile in a bash prompt, add PS1='$(__awskit_ps1)'\"$PS1\" "
-                           "after that line. Starship already shows it with its aws module.",
-                           "dim-label", wrap=True))
+        if sys.platform == "win32":
+            tip = ("Run notepad $PROFILE in PowerShell and add that line. If PowerShell then says "
+                   "running scripts is disabled, run Set-ExecutionPolicy -Scope CurrentUser "
+                   "RemoteSigned once. Starship and Oh My Posh show the profile with their aws "
+                   "module.")
+        else:
+            tip = ("To show the profile in a bash prompt, add PS1='$(__awskit_ps1)'\"$PS1\" after "
+                   "that line. Starship already shows it with its aws module.")
+        setup.append(label(tip, "dim-label", wrap=True))
         self.append(setup)
         self.shell.connect("notify::selected", lambda *_: self.update_snippet())
         self.update_snippet()
 
     def update_snippet(self):
-        shell = self.SHELLS[self.shell.get_selected()]
-        rc = {"bash": "~/.bashrc", "zsh": "~/.zshrc", "fish": "~/.config/fish/config.fish"}[shell]
-        line = ("awskit shell-init fish | source" if shell == "fish"
-                else f'eval "$(awskit shell-init {shell})"')
+        from .profiles import shell_setup
+        line, rc = shell_setup(self.SHELLS[self.shell.get_selected()])
         self.snippet.set_text(line)
         self.snippet.set_tooltip_text(f"Add to {rc}")
 

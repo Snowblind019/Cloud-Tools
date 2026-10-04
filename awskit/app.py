@@ -15,6 +15,11 @@ try:
     gi.require_version("Gtk", "4.0")
     from gi.repository import Gio, GLib, Gtk
 except (ImportError, ValueError) as exc:
+    if sys.platform == "win32":
+        sys.exit(f"GTK 4 isn't set up ({exc}).\n"
+                 "Run install-windows.cmd from the Cloud-Tools folder. It installs GTK for "
+                 "your user, without admin.\n"
+                 "Every tool also works from the terminal: awskit --help")
     sys.exit(f"GTK 4 for Python is missing ({exc}).\n"
              "Fedora:        sudo dnf install python3-gobject gtk4\n"
              "Debian/Ubuntu: sudo apt install python3-gi gir1.2-gtk-4.0\n"

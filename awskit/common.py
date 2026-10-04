@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = "1.2.0"
+VERSION = "1.4.0"
 APP_NAME = "AWS Kit"
 APP_ID = "io.github.Snowblind019.AwsKit"
 PICKER_APP_ID = APP_ID + ".Profiles"
@@ -22,7 +22,12 @@ REDACT_APP_ID = APP_ID + ".Redact"
 REDACT_SETTINGS_APP_ID = APP_ID + ".RedactSettings"
 IMAGE_APP_ID = APP_ID + ".ImageRedact"
 
-CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "awskit"
+if os.environ.get("XDG_CONFIG_HOME"):
+    CONFIG_DIR = Path(os.environ["XDG_CONFIG_HOME"]) / "awskit"
+elif os.name == "nt":
+    CONFIG_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "awskit"
+else:
+    CONFIG_DIR = Path.home() / ".config" / "awskit"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CURRENT_PROFILE_FILE = CONFIG_DIR / "current-profile"
 
@@ -498,6 +503,8 @@ WINDOWS_READ_SCRIPT = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
 
 def clip_backends() -> list:
     """Clipboard tools that can be used here, best first."""
+    if sys.platform == "win32":
+        return ["win32"]
     found = []
     if is_wsl() and windows_tool("clip.exe"):
         found.append("windows")
@@ -536,6 +543,8 @@ def _read_windows():
 
 def read_clipboard() -> str:
     backends = clip_backends()
+    if backends == ["win32"]:
+        return _win32_read_text()
     if backends[:1] == ["windows"]:
         text = _read_windows()
         if text is not None:
@@ -556,6 +565,10 @@ def read_clipboard() -> str:
 
 def write_clipboard(text: str):
     backend = clip_backend()
+    if backend == "win32":
+        _win32_write({13: (text.replace("\r\n", "\n").replace("\n", "\r\n") + "\0")
+                      .encode("utf-16-le")})
+        return
     if backend == "windows":
         # clip.exe only reads Unicode correctly as UTF-16 with a byte order mark,
         # and Windows apps expect CRLF line endings.
@@ -632,6 +645,8 @@ def _windows_image(script_for_path, read: bool, png: bytes = b""):
 def read_clipboard_image():
     """The clipboard image as PNG bytes, or None when there isn't one."""
     backends = clip_backends()
+    if backends == ["win32"]:
+        return _win32_read_image()
     if backends[:1] == ["windows"]:
         data = _windows_image(lambda p: (
             "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; "
@@ -656,6 +671,9 @@ def read_clipboard_image():
 def write_clipboard_image(png: bytes):
     """Put a PNG image on the clipboard, in a way that outlives the app that copied it."""
     backends = clip_backends()
+    if backends == ["win32"]:
+        _win32_write_image(png)
+        return
     if backends[:1] == ["windows"]:
         ok = _windows_image(lambda p: (
             "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; "
@@ -678,6 +696,118 @@ def write_clipboard_image(png: bytes):
                          "or xclip on X11.")
 
 
+# ---- native Windows clipboard, through the Win32 API
+
+def _win32_api():
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.CloseClipboard.restype = wintypes.BOOL
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.GetClipboardData.restype = wintypes.HANDLE
+    user32.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
+    user32.RegisterClipboardFormatW.restype = wintypes.UINT
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+    return ctypes, user32, kernel32
+
+
+def _win32_open(user32):
+    import time
+    for _ in range(20):  # another app may have it open for a moment
+        if user32.OpenClipboard(None):
+            return
+        time.sleep(0.05)
+    raise ClipboardError("The clipboard is busy. Try again.")
+
+
+def _win32_write(formats: dict):
+    """formats: {clipboard format number: bytes}. Windows owns the memory once it's set."""
+    ctypes, user32, kernel32 = _win32_api()
+    _win32_open(user32)
+    try:
+        user32.EmptyClipboard()
+        for fmt, data in formats.items():
+            handle = kernel32.GlobalAlloc(0x0002, len(data))  # GMEM_MOVEABLE
+            if not handle:
+                raise ClipboardError("Couldn't get memory for the clipboard.")
+            ptr = kernel32.GlobalLock(handle)
+            ctypes.memmove(ptr, data, len(data))
+            kernel32.GlobalUnlock(handle)
+            if not user32.SetClipboardData(fmt, handle):
+                kernel32.GlobalFree(handle)
+                raise ClipboardError("Couldn't put that on the clipboard.")
+    finally:
+        user32.CloseClipboard()
+
+
+def _win32_read_text() -> str:
+    ctypes, user32, kernel32 = _win32_api()
+    _win32_open(user32)
+    try:
+        handle = user32.GetClipboardData(13)  # CF_UNICODETEXT
+        if not handle:
+            return ""
+        ptr = kernel32.GlobalLock(handle)
+        try:
+            return ctypes.wstring_at(ptr).replace("\r\n", "\n")
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+
+
+def _win32_write_image(png: bytes):
+    """Copies as a bitmap, which every Windows app reads, and as PNG for the apps that
+    prefer it, like browsers, Teams and Office."""
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise ClipboardError("Copying images needs Pillow: pip install Pillow") from exc
+    buf = io.BytesIO()
+    with Image.open(io.BytesIO(png)) as img:
+        img.convert("RGB").save(buf, "BMP")
+    _, user32, _ = _win32_api()
+    png_format = user32.RegisterClipboardFormatW("PNG")
+    _win32_write({8: buf.getvalue()[14:], png_format: png})  # CF_DIB is a BMP minus its header
+
+
+def _win32_read_image():
+    try:
+        from PIL import Image, ImageGrab
+    except ImportError as exc:
+        raise ClipboardError("Pasting images needs Pillow: pip install Pillow") from exc
+    try:
+        grabbed = ImageGrab.grabclipboard()
+    except OSError as exc:
+        raise ClipboardError(f"Couldn't read the clipboard: {exc}") from exc
+    if isinstance(grabbed, list):
+        # A file copied in File Explorer comes through as its path.
+        for path in grabbed:
+            try:
+                grabbed = Image.open(path)
+                break
+            except OSError:
+                continue
+        else:
+            return None
+    if grabbed is None:
+        return None
+    buf = io.BytesIO()
+    grabbed.save(buf, "PNG")
+    return buf.getvalue()
+
+
 def have_pii_redact() -> bool:
     """PII Redact is built into AWS Kit, so Copy redacted is always there."""
     return True
@@ -690,7 +820,42 @@ def pii_redact(text: str) -> str:
     return out
 
 
+# A Windows toast through Windows PowerShell, which every Windows 10 and 11 machine has.
+# It shows under PowerShell's name, since registering an app for toasts needs a shortcut
+# with an app ID. Title and text come in through environment variables.
+WINDOWS_TOAST_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+$null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+$t = [Security.SecurityElement]::Escape($env:AWSKIT_TOAST_TITLE)
+$m = [Security.SecurityElement]::Escape($env:AWSKIT_TOAST_TEXT)
+$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+$xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>$t</text><text>$m</text></binding></visual></toast>")
+$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($xml))
+"""
+
+
+def _windows_toast(title: str, message: str):
+    import base64
+    ps = windows_tool("powershell.exe")
+    if not ps:
+        return
+    encoded = base64.b64encode(WINDOWS_TOAST_SCRIPT.encode("utf-16-le")).decode("ascii")
+    env = dict(os.environ, AWSKIT_TOAST_TITLE=title[:120], AWSKIT_TOAST_TEXT=message[:400])
+    try:
+        subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                        "-EncodedCommand", encoded], env=env, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=20,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def notify(title: str, message: str, urgent=False, icon="dialog-information"):
+    if sys.platform == "win32":
+        _windows_toast(title, message)
+        return
     if not shutil.which("notify-send"):
         return
     cmd = ["notify-send", "-a", APP_NAME, "-i", icon, "-t", "10000"]

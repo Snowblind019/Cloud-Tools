@@ -1,6 +1,7 @@
 """Lab Sweep page for the AWS Kit window."""
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -333,9 +334,9 @@ class SweepSettings(Gtk.Window):
         outer.append(grid)
 
         outer.append(label("Daily check", "heading"))
-        outer.append(label("A systemd user timer runs the sweep every day and sends a desktop "
-                           "notification if anything is still costing money.", "dim-label",
-                           wrap=True))
+        how = ("A scheduled task" if sys.platform == "win32" else "A systemd user timer")
+        outer.append(label(f"{how} runs the sweep every day and sends a desktop notification "
+                           "if anything is still costing money.", "dim-label", wrap=True))
         row = hbox(6)
         self.at = Gtk.Entry(text="21:00", width_chars=6)
         row.append(label("Time"))

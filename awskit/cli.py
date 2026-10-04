@@ -214,6 +214,94 @@ def sweep_notify(items, warnings, profiles) -> int:
     return 0
 
 
+WINDOWS_TASK = "AWS Kit Lab Sweep"
+
+
+def windows_launcher():
+    """(pythonw.exe, awskit.pyw) from the Windows install, or None when running from a
+    plain checkout. The installer puts awskit.pyw next to the app folder."""
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    script = Path(__file__).resolve().parent.parent.parent / "awskit.pyw"
+    if pythonw.exists() and script.exists():
+        return str(pythonw), str(script)
+    return None
+
+
+def windows_task_xml(command: str, arguments: str, at: str) -> str:
+    """A Task Scheduler task for the current user that runs daily, and catches up after a
+    missed run like the systemd timer's Persistent=true. No admin needed to add it."""
+    from xml.sax.saxutils import escape
+    hh, mm = at.split(":")
+    return f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Runs the AWS Kit lab sweep and notifies you if anything is still costing money.</Description></RegistrationInfo>
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>2026-01-01T{int(hh):02d}:{mm}:00</StartBoundary>
+      <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
+  </Settings>
+  <Actions Context="Author">
+    <Exec><Command>{escape(command)}</Command><Arguments>{escape(arguments)}</Arguments></Exec>
+  </Actions>
+</Task>
+"""
+
+
+def _install_windows_task(at, args) -> int:
+    import tempfile
+    launcher = windows_launcher()
+    if not launcher:
+        err("The daily check needs AWS Kit installed with install-windows.cmd.")
+        return 1
+    pythonw, script = launcher
+    arguments = f'"{script}" sweep --notify --quiet'
+    for p in args.profile or []:
+        arguments += f' --profile "{p}"'
+    fd, path = tempfile.mkstemp(suffix=".xml")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-16") as fh:
+            fh.write(windows_task_xml(pythonw, arguments, at))
+        r = subprocess.run(["schtasks", "/Create", "/F", "/TN", WINDOWS_TASK, "/XML", path],
+                           capture_output=True, text=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except OSError as exc:
+        err(f"Couldn't run schtasks: {exc}")
+        return 1
+    finally:
+        os.unlink(path)
+    if r.returncode != 0:
+        err((r.stderr or r.stdout).strip() or "schtasks failed.")
+        return 1
+    hh, mm = at.split(":")
+    print(f"Lab sweep will run every day at {int(hh):02d}:{mm} and notify you if anything is "
+          "still costing money.")
+    print("SSO sign-ins expire, so if you aren't signed in at that time you'll get a "
+          "notification saying so instead.")
+    print(f"It's in Task Scheduler as {WINDOWS_TASK}.")
+    return 0
+
+
+def _remove_windows_task() -> int:
+    try:
+        r = subprocess.run(["schtasks", "/Delete", "/F", "/TN", WINDOWS_TASK],
+                           capture_output=True, text=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except OSError as exc:
+        err(f"Couldn't run schtasks: {exc}")
+        return 1
+    print("Removed the daily sweep." if r.returncode == 0 else "No daily sweep was set up.")
+    return 0
+
+
 def systemd_dir() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user"
 
@@ -223,6 +311,8 @@ def install_timer(at, args) -> int:
     if not re.fullmatch(r"\d{1,2}:\d{2}", at or ""):
         err("Give a time like 21:00.")
         return 1
+    if sys.platform == "win32":
+        return _install_windows_task(at, args)
     exe = shutil.which("awskit") or str(Path.home() / ".local" / "bin" / "awskit")
     unit_dir = systemd_dir()
     unit_dir.mkdir(parents=True, exist_ok=True)
@@ -253,6 +343,8 @@ def install_timer(at, args) -> int:
 
 
 def remove_timer() -> int:
+    if sys.platform == "win32":
+        return _remove_windows_task()
     if shutil.which("systemctl"):
         subprocess.run(["systemctl", "--user", "disable", "--now", "awskit-sweep.timer"],
                        capture_output=True)
@@ -596,6 +688,10 @@ def launcher_script(module_args: str, comment: str) -> str:
 
 
 def cmd_install(args) -> int:
+    if sys.platform == "win32":
+        err("On Windows, run install-windows.cmd from the Cloud-Tools folder instead. It "
+            "installs AWS Kit for your user, without admin.")
+        return 1
     from . import TOOL_DIRS
     from .redact import remove_old_install
     repo = Path(__file__).resolve().parent.parent
@@ -649,6 +745,9 @@ def cmd_install(args) -> int:
 
 
 def cmd_uninstall(args) -> int:
+    if sys.platform == "win32":
+        err("On Windows, remove AWS Kit from Settings, Apps, Installed apps.")
+        return 1
     removed = []
     bin_dir = Path.home() / ".local" / "bin"
     exe = bin_dir / "awskit"
@@ -722,7 +821,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Desktop notification if anything is running (used by the timer)")
     s.add_argument("-q", "--quiet", action="store_true", help="No progress line")
     s.add_argument("--install-timer", metavar="HH:MM", nargs="?", const="21:00",
-                   help="Run --notify every day at this time with a systemd user timer")
+                   help="Run --notify every day at this time (a systemd user timer, or a "
+                        "scheduled task on Windows)")
     s.add_argument("--remove-timer", action="store_true", help="Remove the daily timer")
     s.set_defaults(func=cmd_sweep)
 
@@ -794,7 +894,8 @@ def build_parser() -> argparse.ArgumentParser:
     pr.set_defaults(func=cmd_profile)
 
     sh = sub.add_parser("shell-init", help="Print the shell hook for awsp and the prompt")
-    sh.add_argument("shell", nargs="?", default="bash", choices=("bash", "zsh", "fish"))
+    sh.add_argument("shell", nargs="?", default="powershell" if sys.platform == "win32"
+                    else "bash", choices=("bash", "zsh", "fish", "powershell", "pwsh"))
     sh.set_defaults(func=cmd_shell_init)
 
     i = sub.add_parser("install", help="Install to ~/.local and add launcher entries")

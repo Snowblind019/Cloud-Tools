@@ -2,7 +2,7 @@
 
 I made this because I was covering things in screenshots by hand. Before I could share a screenshot of a terminal or the AWS console while troubleshooting, I had to open it in Gradia and draw filled boxes over account IDs, ARNs, emails and anything else that pointed back to me or my accounts. [PII Redact](../pii-redact/) already did that for text, so I wanted the same thing for images.
 
-It reads the text in a screenshot, finds the same things PII Redact does, and covers each one with a solid box. Then you get a toolbar to fix it up by hand: cover anything it missed, draw boxes, ovals, lines, arrows, freehand and text, change colors and widths, and save, rename, move or copy the result. It's one of the tools in [AWS Kit](../awskit/), so it's a page in the AWS Kit window, a window of its own for a keybind or Open With, and a terminal command.
+It reads the text in a screenshot, finds the same things PII Redact does, and covers each one with a solid box. Then you get a toolbar to fix it up by hand: cover anything it missed, draw boxes, ovals, lines, arrows, freehand and text, change colors and widths, and save, rename, move or copy the result. It's one of the tools in [AWS Kit](../awskit/), so it's a page in the AWS Kit window, a window of its own for a keybind or Open With, and a terminal command. It runs on Windows too, as part of AWS Kit, with an installer that doesn't need admin rights. See [Windows](#windows).
 
 ![The Image Redact page in AWS Kit, with the sample screenshot covered and an arrow drawn on it](docs/screenshot.png)
 
@@ -14,12 +14,13 @@ Part of [AWS Kit](../awskit/). The screenshot uses the fake data in `examples/sa
 - **Covers only the part that matters.** In `arn:aws:iam::123456789012:user/jane`, only the account ID and the user name get boxed. Regions, resource types, private IPs and Terraform addresses stay readable, the same as with PII Redact.
 - **Drawing tools.** Select, Cover, Box, Oval, Line, Arrow, Pen and Text, with a color picker, a Fill toggle, line width and text size. Everything stays editable until you save: move it, resize it, recolor it or delete it.
 - **Cover tool.** One click-and-drag draws a solid box in the same color text detection uses, so covering something it missed doesn't mean switching to Box, turning on Fill and changing the color every time.
+- **Rounded corners.** The Corners setting rounds Cover and Box shapes, including the ones text detection draws. A rounded cover grows just enough that its corners still cover everything the square one did.
 - **See through.** Shows what's under every solid box, with an outline around each one, so you can check they cover the right thing before you share. Saved and copied images are always solid.
 - **Rename and move from inside the app.** The name box and the folder button at the bottom say where Save writes. Once it's saved, changing the name renames the file and picking a folder moves it. Typing `.jpg` instead of `.png` converts it.
 - **Paste and copy.** Ctrl+V pastes a screenshot and Copy puts the finished image on the clipboard. On WSL that's the Windows clipboard, so Win+Shift+S, Ctrl+V, Copy, and paste into Teams or a browser works.
 - **Undo and redo** for everything, including text detection.
 - **Saves a fresh image.** The saved or copied file is a new render with the boxes painted into the pixels. Nothing from the original comes along: no layers, no metadata, nothing hidden under the boxes.
-- **Local only.** Text detection runs on your machine with tesseract. No network calls.
+- **Local only.** Text detection runs on your machine, with tesseract on Linux and the OCR built into Windows on Windows. No network calls.
 
 ## Install
 
@@ -77,8 +78,9 @@ The controls next to the tools change with the tool:
 - **Fill** shows for Box and Oval.
 - **Width** shows for the shapes that have a line.
 - **Size** shows for Text.
+- **Corners** shows for Cover and Box. It rounds the corners, in pixels.
 
-With a shape selected, changing any of them changes that shape.
+With a shape selected, changing any of them changes that shape. With nothing selected, they set what the tool draws next. For the Cover tool, changing the color or corners also restyles the boxes text detection drew, as long as you haven't changed one of those boxes yourself.
 
 Holding Shift while drawing a Cover, Box or Oval makes it square or round.
 
@@ -168,9 +170,27 @@ Mod+Alt+I { spawn-sh "~/.local/bin/awskit image clip -g"; }
 
 The window's app ID is `io.github.Snowblind019.AwsKit.ImageRedact`.
 
+## Windows
+
+Image Redact is part of AWS Kit on Windows too, with the same window and tools. Install AWS Kit with `install-windows.cmd`, which doesn't need admin. See [Windows](../awskit/README.md#windows) in AWS Kit's README. It adds **Image Redact** to the AWS Kit folder in the Start menu and to **Open with** for images.
+
+What's different on Windows:
+
+- **Text detection uses the OCR built into Windows.** It needs nothing installed. It boxes whole words, not single characters, so a match inside a long word like an ARN gets a slightly wider box. If Tesseract is installed (in its usual folder or on PATH), it's used instead for tighter boxes.
+- **Paste and copy use the Windows clipboard.** Win+Shift+S, then Ctrl+V in Image Redact. Copy puts the finished image on the clipboard as both a bitmap and a PNG, so it pastes into Teams, Outlook, browsers and Paint. Copying an image file in File Explorer and pasting it works too.
+- **Settings** are in `%APPDATA%\awskit`. If something goes wrong, the details go in `image-redact.log` there.
+
+The commands are the same: `awskit image`, `awskit image shot.png -o out.png`, `awskit image clip` and `awskit image check`.
+
+If GTK isn't set up, `awskit image` falls back to a simpler window made with tkinter, with the same tools. `AWSKIT_UI=tk` opens that one on purpose.
+
+### If Windows OCR says there's no language
+
+Windows OCR uses the languages installed in Windows. If none of them has OCR, go to Settings, Time & language, Language & region, click the three dots next to your language, then **Language options**, and add **Optical character recognition** if it's there to add.
+
 ## Settings
 
-Image Redact keeps its own settings in `~/.config/awskit/image.json`. The editor saves them as you go, so there's no need to edit it by hand.
+Image Redact keeps its own settings in `~/.config/awskit/image.json`, or `%APPDATA%\awskit\image.json` on Windows. The editor saves them as you go, so there's no need to edit it by hand.
 
 | Key | Default | What it does |
 |---|---|---|
@@ -180,10 +200,11 @@ Image Redact keeps its own settings in `~/.config/awskit/image.json`. The editor
 | `width` | `4` | Line width |
 | `fill` | `false` | Fill for Box and Oval |
 | `text_size` | `28` | Text size in pixels |
+| `corners` | `0` | Corner rounding for Cover and Box, in pixels. Detected boxes use it too. |
 | `recent_folders` | `[]` | Folders you saved or moved to lately, shown in the folder button |
-| `language` | `"eng"` | Tesseract languages, joined with `+` |
+| `language` | `"eng"` | Tesseract languages, joined with `+`. Windows OCR uses your Windows language instead. |
 
-What gets covered comes from PII Redact's settings in `~/.config/awskit/redact.json`. See [pii-redact/](../pii-redact/).
+What gets covered comes from PII Redact's settings in `~/.config/awskit/redact.json` (`%APPDATA%\awskit\redact.json` on Windows). See [pii-redact/](../pii-redact/).
 
 ## Troubleshooting
 
@@ -196,7 +217,8 @@ What gets covered comes from PII Redact's settings in `~/.config/awskit/redact.j
 | The window crashes with `Couldn't find foreign struct converter for 'cairo.Context'` | Debian/Ubuntu: `sudo apt install python3-gi-cairo` |
 | Paste says there's no image | Copy the screenshot again. Copying an image file in a file manager copies the file, not the image, so drop the file on the window or use Open instead. |
 | On WSL, paste or copy doesn't work | PowerShell is missing or blocked. Installing `wl-clipboard` gives a fallback through WSLg. |
-| Image Redact isn't under Open With | Run `update-desktop-database ~/.local/share/applications`, or log out and back in |
+| Image Redact isn't under Open With | Run `update-desktop-database ~/.local/share/applications`, or log out and back in. On Windows, sign out and back in. |
+| Windows: `Windows OCR failed` | Run `awskit image check` in a terminal. The message after it says what PowerShell reported. |
 
 ## License
 
