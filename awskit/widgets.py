@@ -31,6 +31,7 @@ CSS = b"""
 .bad-text { color: #e01b24; font-weight: bold; }
 .warn-text { color: #e66100; }
 .finding-row { padding: 8px 12px; }
+.mapwarn { padding: 6px 10px; background: alpha(#e66100, 0.16); border-bottom: 1px solid alpha(#e66100, 0.4); }
 """
 
 
@@ -707,6 +708,52 @@ def show_message(parent, heading, body=""):
     dlg = Gtk.AlertDialog(message=heading, detail=body)
     dlg.set_buttons(["OK"])
     dlg.show(parent)
+
+
+def ask(parent, heading, body, yes_label, on_yes, no_label="Cancel"):
+    """A two-button question. on_yes runs only when the second button is pressed;
+    Escape, closing it or the first button do nothing."""
+    dlg = Gtk.AlertDialog(message=heading, detail=body)
+    dlg.set_buttons([no_label, yes_label])
+    dlg.set_cancel_button(0)
+    dlg.set_default_button(0)
+
+    def chosen(d, res):
+        try:
+            if d.choose_finish(res) != 1:
+                return
+        except GLib.Error:
+            return
+        on_yes()
+    dlg.choose(parent, None, chosen)
+
+
+# Folders the user has agreed to run Terraform in, this session.
+_trusted_tf_folders = set()
+
+
+def trust_terraform_folder(folder):
+    """Marks a folder as fine to run Terraform in for the rest of this session."""
+    _trusted_tf_folders.add(os.path.realpath(str(folder)))
+
+
+def confirm_terraform(parent, folder, on_yes, what="terraform plan", detail=""):
+    """Running Terraform in a folder runs that folder's code: providers it names are
+    downloaded and started, and data sources such as external run programs, with your AWS
+    credentials. So ask once per folder per session before doing it."""
+    key = os.path.realpath(str(folder))
+    if key in _trusted_tf_folders:
+        on_yes()
+        return
+
+    def yes():
+        _trusted_tf_folders.add(key)
+        on_yes()
+    ask(parent, f"Run {what} in this folder?",
+        f"{folder}\n\n" + (detail + "\n\n" if detail else "") +
+        "This runs the Terraform code in the folder, with your AWS credentials. "
+        "Terraform downloads and starts the providers it asks for, and some data sources run "
+        "programs. Only do this for code you trust.", "Run it", yes)
 
 
 class ConfirmDeleteDialog(Gtk.Window):

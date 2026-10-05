@@ -1,5 +1,5 @@
 <#
-Installs AWS Kit, with all eight tools and the same windows as on Linux, for the current
+Installs AWS Kit, with all nine tools and the same windows as on Linux, for the current
 Windows user. No admin rights needed.
 
 Double-click install-windows.cmd in the Cloud-Tools folder, or run:
@@ -13,14 +13,18 @@ What it sets up there:
   venv\     PyGObject, pycairo, boto3 and Pillow
   app\      the AWS Kit code
   bin\      awskit, pii-redact and awsp commands, added to your PATH
+  drawio\   the draw.io web app, offline, for Cloud Map's AWS icons and editor
 
 Options:
   -Desktop        also put an AWS Kit shortcut on the desktop
   -NoPath         don't add the commands to your PATH
   -Quiet          don't ask anything
   -GtkZip PATH    use a GTK zip you already downloaded instead of downloading it
+  -DrawioZip PATH use a draw.war you already downloaded instead of downloading it
+  -NoDrawio       skip draw.io; Cloud Map then draws simple stand-in icons and has no editor
 #>
-param([switch]$Desktop, [switch]$NoPath, [switch]$Quiet, [string]$GtkZip = '')
+param([switch]$Desktop, [switch]$NoPath, [switch]$Quiet, [string]$GtkZip = '',
+      [string]$DrawioZip = '', [switch]$NoDrawio)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'  # Invoke-WebRequest is very slow with the progress bar
@@ -33,16 +37,21 @@ $Venv = Join-Path $Root 'venv'
 $Bin = Join-Path $Root 'bin'
 $PyDir = Join-Path $Root 'python'
 $Gtk = Join-Path $Root 'gtk'
+$Drawio = Join-Path $Root 'drawio'
 # The GTK bundle's PyGObject and pycairo are built for this Python, so they have to match.
 $PyMinor = '3.14'
 $PyFallback = '3.14.8'
 $GtkVersion = '2026.8.0'
 $GtkUrl = "https://github.com/wingtk/gvsbuild/releases/download/$GtkVersion/GTK4_Gvsbuild_${GtkVersion}_x64.zip"
+# The SHA-256 of that exact zip. Its DLLs and Python wheels run inside AWS Kit, so a zip
+# that doesn't match (a different build, a bad download, a swapped file) isn't used.
+# Bump it together with $GtkVersion.
+$GtkSha256 = '1f95a92d037f5292da05e6ab1037032ff21ddb7b20d4ac8e83e3674c864c07b0'
 $ProgId = 'AWSKit.ImageRedact'
 $UninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AWSKit'
 $MenuDir = Join-Path ([Environment]::GetFolderPath('Programs')) 'AWS Kit'
 $Tools = @('awskit', 'pii-redact', 'image-redact', 'lab-sweep', 'exposure-audit', 'cloudtrail',
-           'plan-check', 'policy-check', 'profiles')
+           'plan-check', 'policy-check', 'profiles', 'cloud-map')
 
 function Step($text) { Write-Host ''; Write-Host "== $text" -ForegroundColor Cyan }
 function Note($text) { Write-Host "   $text" }
@@ -65,6 +74,13 @@ function Invoke-Quietly([scriptblock]$Block) {
     $saved = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try { & $Block } finally { $ErrorActionPreference = $saved }
+}
+# A zip entry's path inside dest, or $null when it would land outside it (a "zip slip").
+function Get-SafeDest($dest, $name) {
+    $full = [IO.Path]::GetFullPath($dest).TrimEnd('\') + '\'
+    $target = [IO.Path]::GetFullPath((Join-Path $dest ($name.Replace('/', '\'))))
+    if ($target.StartsWith($full, [StringComparison]::OrdinalIgnoreCase)) { return $target }
+    return $null
 }
 function Download($url, $out) {
     try {
@@ -91,7 +107,7 @@ if ($match) { $version = $match.Matches[0].Groups[1].Value }
 
 Write-Host "Installing AWS Kit $version for $env:USERNAME" -ForegroundColor Green
 Note "Into $Root. No admin rights needed."
-Note 'The first install downloads about 330 MB and takes a few minutes.'
+Note 'The first install downloads about 380 MB and takes a few minutes.'
 New-Item -ItemType Directory -Force -Path $Root | Out-Null
 
 # ------------------------------------------------------------------- tidy up 1.3
@@ -173,6 +189,16 @@ if ($Python) {
               "Install Python $PyMinor yourself from python.org (untick 'Use admin privileges'), " +
               "then run this again.")
     }
+    # python.org signs its Windows installers. Anything not signed by the Python Software
+    # Foundation, or with a signature that doesn't check out, is deleted, not run.
+    $sig = Get-AuthenticodeSignature -FilePath $setup
+    $signer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '' }
+    if ($sig.Status -ne 'Valid' -or $signer -notmatch 'O="?Python Software Foundation') {
+        Remove-Item $setup -Force -ErrorAction SilentlyContinue
+        Fail ("The Python installer from python.org isn't signed by the Python Software " +
+              "Foundation (signature: $($sig.Status), signer: $signer), so it wasn't run.`n`n" +
+              "Install Python $PyMinor yourself from python.org, then run this again.")
+    }
     $proc = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(
         '/quiet', 'InstallAllUsers=0', 'PrependPath=0', 'Include_launcher=0', 'Include_test=0',
         'Include_doc=0', 'Include_tcltk=1', 'Include_pip=1', 'Shortcuts=0', 'AssociateFiles=0',
@@ -195,7 +221,8 @@ if ($haveGtk) {
     $removeZip = $false
     if (-not $zip) {
         $zip = Join-Path $env:TEMP "GTK4_Gvsbuild_${GtkVersion}_x64.zip"
-        if (-not (Test-Path $zip) -or (Get-Item $zip).Length -lt 200MB) {
+        $cached = (Test-Path $zip) -and ((Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower() -eq $GtkSha256)
+        if (-not $cached) {
             Note 'Downloading about 300 MB from github.com/wingtk/gvsbuild'
             try {
                 Download $GtkUrl $zip
@@ -208,8 +235,16 @@ if ($haveGtk) {
         $removeZip = $true
     }
     if (-not (Test-Path $zip)) { Fail "Couldn't find $zip" }
+    $hash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
+    if ($hash -ne $GtkSha256) {
+        if ($removeZip) { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
+        Fail ("That GTK zip doesn't match the pinned build $GtkVersion (SHA-256 $hash), so it " +
+              "wasn't used. Nothing was changed.`n`nDownload it from $GtkUrl")
+    }
     Note 'Unpacking the parts AWS Kit needs (about 180 MB)'
-    if (Test-Path $Gtk) { Remove-Item $Gtk -Recurse -Force }
+    $newGtk = "$Gtk.new"
+    if (Test-Path $newGtk) { Remove-Item $newGtk -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $newGtk | Out-Null
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $keep = @('bin/', 'etc/', 'lib/girepository-1.0/', 'lib/gdk-pixbuf-2.0/', 'share/glib-2.0/schemas/',
@@ -222,17 +257,105 @@ if ($haveGtk) {
             if ($name.EndsWith('/')) { continue }
             if (-not ($keep | Where-Object { $name.StartsWith($_) })) { continue }
             if ($skip | Where-Object { $name.EndsWith($_) }) { continue }
-            $dest = Join-Path $Gtk ($name.Replace('/', '\'))
+            $dest = Get-SafeDest $newGtk $name
+            if (-not $dest) { continue }
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
             [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
         }
     } finally {
         $archive.Dispose()
     }
-    if (-not (Test-Path (Join-Path $Gtk 'bin\gtk-4-1.dll'))) { Fail "The GTK zip didn't have what AWS Kit needs." }
-    Set-Content -Path $marker -Value $GtkVersion -Encoding ASCII
+    if (-not (Test-Path (Join-Path $newGtk 'bin\gtk-4-1.dll'))) {
+        Remove-Item $newGtk -Recurse -Force -ErrorAction SilentlyContinue
+        Fail "The GTK zip didn't have what AWS Kit needs. Nothing was changed."
+    }
+    Set-Content -Path (Join-Path $newGtk 'AWSKIT-GTK-VERSION') -Value $GtkVersion -Encoding ASCII
+    # The working GTK is only replaced once the new one is complete.
+    if (Test-Path $Gtk) { Remove-Item $Gtk -Recurse -Force }
+    Rename-Item -Path $newGtk -NewName (Split-Path -Leaf $Gtk)
     if ($removeZip) { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
     Note "Into $Gtk"
+}
+
+# ------------------------------------------------------------------- draw.io
+# The draw.io web app (Apache 2.0). Cloud Map draws draw.io's own AWS icons from it and runs
+# its offline editor from it. It isn't kept in the repo. The pinned version and its SHA-256 come from awskit\common.py.
+function Get-Pin($name) {
+    $m = Select-String -Path (Join-Path $Repo 'awskit\common.py') -Pattern "^$name = `"([^`"]+)`"" | Select-Object -First 1
+    if ($m) { return $m.Matches[0].Groups[1].Value }
+    return ''
+}
+if (-not $NoDrawio) {
+    $DrawioVersion = Get-Pin 'DRAWIO_VERSION'
+    $DrawioSha = Get-Pin 'DRAWIO_SHA256'
+    $DrawioUrl = "https://github.com/jgraph/drawio/releases/download/v$DrawioVersion/draw.war"
+    Step "Setting up draw.io $DrawioVersion (for Cloud Map)"
+    $drawioMarker = Join-Path $Drawio 'AWSKIT-DRAWIO-VERSION'
+    $haveDrawio = (Test-Path $drawioMarker) -and ((Get-Content $drawioMarker -Raw).Trim() -eq $DrawioVersion) -and
+                  (Test-Path (Join-Path $Drawio 'index.html'))
+    if ($haveDrawio -and -not $DrawioZip) {
+        Note 'Already set up'
+    } else {
+        $war = $DrawioZip
+        $removeWar = $false
+        $ok = $true
+        if (-not $war) {
+            $war = Join-Path $env:TEMP "drawio-$DrawioVersion.war"
+            Note 'Downloading about 48 MB from github.com/jgraph/drawio'
+            try {
+                Download $DrawioUrl $war
+                $removeWar = $true
+            } catch {
+                $ok = $false
+                Note "Couldn't download draw.io from $DrawioUrl"
+                Note 'Cloud Map still draws maps, with simple stand-in icons, but has no editor. Download that file another way, then run:'
+                Note '  powershell -ExecutionPolicy Bypass -File windows\install.ps1 -DrawioZip C:\path\to\draw.war'
+            }
+        }
+        if ($ok -and -not (Test-Path $war)) {
+            $ok = $false
+            Note "Couldn't find $war"
+        }
+        if ($ok) {
+            $hash = (Get-FileHash -Path $war -Algorithm SHA256).Hash.ToLower()
+            if ($hash -ne $DrawioSha) {
+                $ok = $false
+                Note "That draw.io file doesn't match the pinned version $DrawioVersion (SHA-256 $hash). Nothing was changed."
+                Note "Download it from $DrawioUrl"
+            }
+        }
+        if ($ok) {
+            Note 'Unpacking (about 110 MB)'
+            $newDir = "$Drawio.new"
+            if (Test-Path $newDir) { Remove-Item $newDir -Recurse -Force }
+            New-Item -ItemType Directory -Force -Path $newDir | Out-Null
+            Add-Type -AssemblyName System.IO.Compression
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $archive = [IO.Compression.ZipFile]::OpenRead($war)
+            try {
+                foreach ($entry in $archive.Entries) {
+                    $name = $entry.FullName.Replace('\', '/')
+                    if ($name.EndsWith('/') -or $name.StartsWith('WEB-INF/') -or $name.StartsWith('META-INF/') -or $name.EndsWith('.map')) { continue }
+                    $dest = Get-SafeDest $newDir $name
+                    if (-not $dest) { continue }
+                    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+                    [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
+                }
+            } finally {
+                $archive.Dispose()
+            }
+            if (Test-Path (Join-Path $newDir 'index.html')) {
+                Set-Content -Path (Join-Path $newDir 'AWSKIT-DRAWIO-VERSION') -Value $DrawioVersion -Encoding ASCII
+                if (Test-Path $Drawio) { Remove-Item $Drawio -Recurse -Force }
+                Rename-Item -Path $newDir -NewName 'drawio'
+                Note "Into $Drawio"
+            } else {
+                Remove-Item $newDir -Recurse -Force -ErrorAction SilentlyContinue
+                Note "That file isn't draw.io's web app. Cloud Map will use stand-in icons."
+            }
+        }
+        if ($removeWar) { Remove-Item $war -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 # ------------------------------------------------------------------- packages
@@ -311,7 +434,7 @@ function New-Shortcut($path, $arguments, $icon, $description) {
     $lnk.Save()
 }
 New-Item -ItemType Directory -Force -Path $MenuDir | Out-Null
-New-Shortcut (Join-Path $MenuDir 'AWS Kit.lnk') '' 'awskit.ico' 'PII Redact, Image Redact, Lab Sweep, Exposure Audit, CloudTrail, Plan Check, Policy Check and Profiles'
+New-Shortcut (Join-Path $MenuDir 'AWS Kit.lnk') '' 'awskit.ico' 'PII Redact, Image Redact, Lab Sweep, Exposure Audit, CloudTrail, Plan Check, Policy Check, Profiles and Cloud Map'
 New-Shortcut (Join-Path $MenuDir 'PII Redact.lnk') 'redact' 'awskit.ico' 'Paste output and get it back with account IDs, keys and personal info redacted'
 New-Shortcut (Join-Path $MenuDir 'Image Redact.lnk') 'image' 'image-redact.ico' 'Cover account IDs, keys and personal info in screenshots'
 New-Shortcut (Join-Path $MenuDir 'AWS Profile Picker.lnk') 'profile' 'awskit.ico' 'Switch the AWS profile your terminals use'
@@ -347,12 +470,23 @@ Note 'Right-click an image, Open with: Image Redact'
 
 # ------------------------------------------------------------------- PATH
 if (-not $NoPath) {
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    if ($null -eq $userPath) { $userPath = '' }
-    if (($userPath -split ';') -notcontains $Bin) {
-        $newPath = (($userPath.TrimEnd(';'), $Bin) | Where-Object { $_ }) -join ';'
-        [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-        Note "Added $Bin to your PATH. New terminals get awskit, pii-redact and awsp."
+    # Read and written as stored, so entries like %USERPROFILE%\bin stay as they are
+    # instead of being written back expanded.
+    $envKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+    try {
+        $userPath = $envKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if ($null -eq $userPath) { $userPath = '' }
+        if (($userPath -split ';') -notcontains $Bin) {
+            $newPath = (($userPath.TrimEnd(';'), $Bin) | Where-Object { $_ }) -join ';'
+            $envKey.SetValue('Path', $newPath, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+            # Setting and clearing a variable this way tells Windows the environment changed,
+            # so terminals opened from now on see the new PATH.
+            [Environment]::SetEnvironmentVariable('AWSKIT_PATH_REFRESH', '1', 'User')
+            [Environment]::SetEnvironmentVariable('AWSKIT_PATH_REFRESH', $null, 'User')
+            Note "Added $Bin to your PATH. New terminals get awskit, pii-redact and awsp."
+        }
+    } finally {
+        $envKey.Close()
     }
 }
 
@@ -375,7 +509,9 @@ New-ItemProperty -Path $UninstallKey -Name 'EstimatedSize' -PropertyType DWord -
 # ------------------------------------------------------------------- check
 Step 'Checking'
 $env:AWSKIT_GTK = $Gtk
-$check = Invoke-Quietly { & $VenvPy -c "import sys; sys.path.insert(0, r'$App'); import awskit, gi; gi.require_version('Gtk', '4.0'); from gi.repository import Gtk; print('GTK %d.%d.%d' % (Gtk.get_major_version(), Gtk.get_minor_version(), Gtk.get_micro_version()))" 2>&1 }
+# The app folder goes in through the environment, so a ' in a user name can't break it.
+$env:AWSKIT_APP_DIR = $App
+$check = Invoke-Quietly { & $VenvPy -c "import os, sys; sys.path.insert(0, os.environ['AWSKIT_APP_DIR']); import awskit, gi; gi.require_version('Gtk', '4.0'); from gi.repository import Gtk; print('GTK %d.%d.%d' % (Gtk.get_major_version(), Gtk.get_minor_version(), Gtk.get_micro_version()))" 2>&1 }
 if ($LASTEXITCODE -ne 0) {
     Write-Host ($check | Out-String) -ForegroundColor Yellow
     Fail 'GTK did not load. The message above says why.'

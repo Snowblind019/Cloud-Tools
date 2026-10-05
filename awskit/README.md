@@ -1,6 +1,6 @@
 # AWS Kit
 
-The app that holds all eight tools in this repo. It gives them one window with a sidebar, one `awskit` command, one installer, and shared code for AWS sessions, tables, exporting, the clipboard and redaction.
+The app that holds all nine tools in this repo. It gives them one window with a sidebar, one `awskit` command, one installer, and shared code for AWS sessions, tables, exporting, the clipboard and redaction.
 
 ![The AWS Kit window on the PII Redact page](../pii-redact/docs/screenshot.png)
 
@@ -14,6 +14,7 @@ The app that holds all eight tools in this repo. It gives them one window with a
 | Plan Check | Plan Check | `awskit plan` | [plan-check/](../plan-check/) |
 | Policy Check | Policy Check | `awskit policy` | [policy-check/](../policy-check/) |
 | Profiles | Profiles | `awskit profile` or `awsp` | [profiles/](../profiles/) |
+| Cloud Map | Cloud Map | `awskit map` | [cloud-map/](../cloud-map/) |
 
 This README covers what they have in common, plus keybinds for the whole kit. Each tool's README goes into how that tool works.
 
@@ -33,18 +34,22 @@ sudo dnf install python3-boto3 python3-gobject gtk4 wl-clipboard
 | `pii-redact clip`, and copying that sticks around after a window closes on Niri, Hyprland and Sway | `wl-clipboard`, or `xclip` on X11 |
 | Image Redact finding text in screenshots | `tesseract tesseract-langpack-eng` |
 | SSO sign-in from the Profiles page | `awscli2` |
-| Plan Check running plans by itself | `terraform` or `tofu` |
+| Plan Check running plans by itself, Cloud Map reading a Terraform folder, and the designer checking what it writes | `terraform` or `tofu` |
+| Cloud Map's editor inside the window (optional) | `webkitgtk6.0` (Debian and Ubuntu: `gir1.2-webkit-6.0`, Arch: `webkitgtk-6.0`). Without it, the editor opens in its own browser window |
 
-PII Redact, Image Redact, Plan Check and Policy Check work offline and don't need boto3. On Debian and Ubuntu, Image Redact also needs `python3-gi-cairo`. Without GTK, everything still works from the terminal.
+PII Redact, Image Redact, Plan Check and Policy Check work offline and don't need boto3, and neither do Cloud Map's Terraform maps. On Debian and Ubuntu, Image Redact and the Cloud Map page also need `python3-gi-cairo`. Without GTK, everything still works from the terminal.
 
 On Windows, see [Windows](#windows) below. On WSL, see [WSL](../README.md#wsl) in the main README for what works differently.
 
 The installer:
 
-- copies `awskit/` and the eight tool folders to `~/.local/share/awskit/`
+- copies `awskit/` and the nine tool folders to `~/.local/share/awskit/`
 - writes two small launchers: `~/.local/bin/awskit`, and `~/.local/bin/pii-redact`, which is the same as `awskit redact`
 - adds five launcher entries: **AWS Kit** (right-click opens a tool directly), **AWS Profile Picker**, **PII Redact** (right-click has Redact clipboard and Settings), **PII Redact Settings**, and **Image Redact** (right-click has Open clipboard image and Redact clipboard image), which also shows up under Open With for images
 - removes launcher entries left over from the standalone pii-redact, if you had it
+- downloads the draw.io web app (about 48 MB, 110 MB unpacked) to `~/.local/share/awskit/drawio/` and checks its SHA-256. Cloud Map draws draw.io's own AWS icons from it and runs its offline editor from it (see [Icons](../cloud-map/README.md#icons) for why it isn't in the repo). It only downloads again when the pinned version changes
+
+If GitHub downloads are blocked, download `draw.war` from the link the installer prints (the pinned release on github.com/jgraph/drawio) another way, then run `./install.sh --drawio-zip /path/to/draw.war`. `./install.sh --no-drawio` skips it, and Cloud Map then draws simple labels in place of the AWS icons and has no editor.
 
 To update, `git pull` and run `./install.sh` again. To remove everything, run `awskit uninstall`. That leaves your settings in `~/.config/awskit/`, so delete that folder too if you want them gone.
 
@@ -52,7 +57,7 @@ To try it without installing, run `python3 -m awskit` from the root of the repo.
 
 ## The window
 
-Run `awskit` with no arguments, or open **AWS Kit** from your launcher. It opens on PII Redact, the tool you'll probably use most. `awskit gui audit` opens it on a certain page (redact, image, sweep, audit, trail, plan, policy or profiles). If the window is already open, it switches to that page instead of opening a second window.
+Run `awskit` with no arguments, or open **AWS Kit** from your launcher. It opens on PII Redact, the tool you'll probably use most. `awskit gui audit` opens it on a certain page (redact, image, sweep, audit, trail, plan, policy, profiles or map). If the window is already open, it switches to that page instead of opening a second window.
 
 Things that work the same on every page:
 
@@ -63,7 +68,7 @@ Things that work the same on every page:
 - **Status bar** at the bottom. It shows progress while a scan runs, and **Stop** cancels it after the calls already running finish.
 - **Export** saves the table as Markdown, CSV or JSON. The file name you pick decides the format.
 
-Keyboard: Ctrl+1 to Ctrl+8 switch pages, and Ctrl+Q quits. On the PII Redact page, Ctrl+Shift+C copies and Ctrl+, opens its settings. Image Redact has its own shortcuts, see [image-redact/](../image-redact/#the-editor).
+Keyboard: Ctrl+1 to Ctrl+9 switch pages, and Ctrl+Q quits. On the PII Redact page, Ctrl+Shift+C copies and Ctrl+, opens its settings. Image Redact has its own shortcuts, see [image-redact/](../image-redact/#the-editor), and so does the Cloud Map page, see [cloud-map/](../cloud-map/README.md#the-cloud-map-page).
 
 All AWS calls run in the background, so the window stays usable during a scan.
 
@@ -218,8 +223,9 @@ On GNOME Wayland, clip mode depends on wl-clipboard, which GNOME doesn't fully s
 | `awskit plan` | Plan Check, see [plan-check/](../plan-check/) |
 | `awskit policy` | Policy Check, see [policy-check/](../policy-check/) |
 | `awskit profile` | Profile picker, see [profiles/](../profiles/) |
+| `awskit map` | Cloud Map: `scan`, `tf`, `export` (to `.drawio`, SVG or PNG), `edit` in the offline draw.io, `remember` and `layout` for the saved layout, and `design` for the designer (`new`, `edit`, `check`, `build`), see [cloud-map/](../cloud-map/) |
 | `awskit shell-init bash` | Print the shell hook for `awsp` (bash, zsh, fish or powershell) |
-| `awskit install` | Install to `~/.local` (what `install.sh` runs) |
+| `awskit install` | Install to `~/.local` (what `install.sh` runs). `--drawio-zip PATH` and `--no-drawio` as above |
 | `awskit uninstall` | Remove it |
 | `awskit --version` | Print the version |
 
@@ -263,6 +269,7 @@ AWS Kit only talks to AWS APIs. PII Redact and Image Redact don't talk to anythi
 | Plan Check | Nothing in AWS. Running a plan needs whatever your Terraform needs. |
 | Policy Check | Nothing offline. `access-analyzer:ValidatePolicy` for Also ask AWS, and `iam:GetPolicy`, `iam:GetPolicyVersion` and `iam:GetRole` for Load from AWS. |
 | Profiles | `sts:GetCallerIdentity` for Check all |
+| Cloud Map | `SecurityAudit`, plus `budgets:ViewBudget` and `ce:GetAnomalyMonitors` for the cost box. Organizations and Identity Center need the management account or a delegated admin. Terraform maps need nothing in AWS. |
 
 Each tool's README lists the exact actions. When a role can't read something, scans keep going and list what they couldn't check at the end instead of failing.
 
@@ -272,25 +279,28 @@ Everything lives in `~/.config/awskit/`:
 
 | File | What's in it |
 |---|---|
-| `config.json` | Lab Sweep and Exposure Audit settings, below. Lab Sweep's **Settings** button edits it. |
+| `config.json` | Lab Sweep, Exposure Audit and Cloud Map settings, below. Lab Sweep's **Settings** button edits it. |
 | `redact.json` | PII Redact's settings. Its **Settings** window edits it. Image Redact uses them too. See [pii-redact/](../pii-redact/). |
 | `image.json` | Image Redact's colors, widths and recent folders. The editor saves it as you go. See [image-redact/](../image-redact/). |
 | `current-profile` | The profile picked in Profiles. See [profiles/](../profiles/). |
+| `cloud-map/` | Cloud Map's labels file, redaction key, and the snapshots the page saves. See [cloud-map/](../cloud-map/#settings). |
 
 `config.json`:
 
 | Key | Default | What it does |
 |---|---|---|
 | `keep` | `[]` | IDs, ARNs or names Lab Sweep never offers to delete |
-| `keep_tag` | `"awskit:keep"` | Resources with this tag key are always kept |
+| `keep_tag` | `"awskit:keep"` | Resources with this tag key are kept, for the types where AWS lists tags (see the Lab Sweep README). Use `keep` for the rest |
 | `regions` | `[]` | Regions that Lab Sweep and Exposure Audit scan. Empty means every region enabled in the account. Setting this makes scans faster if you only use a few regions. |
 | `notify_threshold` | `1.0` | Lab Sweep's daily check only notifies above this many dollars a month |
 | `timer_profiles` | `[]` | Profiles the daily check covers. Empty means the current one. |
 | `sns_topic` | `""` | SNS topic ARN for daily check summaries |
+| `known_accounts` | `[]` | Account IDs Cloud Map treats as yours when it can't read the org, so a role trusted by one of them isn't flagged |
+| `cloud_map` | `{}` | What the Cloud Map page showed last. The page keeps it up to date. |
 
 ## Windows
 
-AWS Kit runs on Windows 10 and 11 the same way it does on Linux: the same window, all eight tools, and the same commands. It's the same code, running on GTK 4 for Windows.
+AWS Kit runs on Windows 10 and 11 the same way it does on Linux: the same window, all nine tools, and the same commands. It's the same code, running on GTK 4 for Windows.
 
 ### Install
 
@@ -298,17 +308,18 @@ AWS Kit runs on Windows 10 and 11 the same way it does on Linux: the same window
 2. Double-click `install-windows.cmd` in that folder. If Windows says it protected your PC, click **More info**, then **Run anyway**. That's because the file came from the internet.
 3. It asks if you want a desktop shortcut, and if you want to open AWS Kit when it's done.
 
-No admin rights needed. Everything goes in `%LOCALAPPDATA%\AWSKit`, for your user only. The first install downloads about 330 MB and takes a few minutes. The installer:
+No admin rights needed. Everything goes in `%LOCALAPPDATA%\AWSKit`, for your user only. The first install downloads about 380 MB and takes a few minutes. The installer:
 
-- uses your Python 3.14 if you have it, or installs Python 3.14 from python.org just for AWS Kit, in that folder. It has to be 3.14, since that's what the Windows build of GTK's Python bindings is made for.
-- downloads GTK 4 for Windows from the [gvsbuild](https://github.com/wingtk/gvsbuild) project and unpacks only what AWS Kit needs, about 180 MB
+- uses your Python 3.14 if you have it, or installs Python 3.14 from python.org just for AWS Kit, in that folder. It has to be 3.14, since that's what the Windows build of GTK's Python bindings is made for. The installer only runs if Windows confirms it's signed by the Python Software Foundation.
+- downloads GTK 4 for Windows from the [gvsbuild](https://github.com/wingtk/gvsbuild) project and unpacks only what AWS Kit needs, about 180 MB. The zip has to match the SHA-256 pinned in `install.ps1`, the same way draw.io's does
 - installs PyGObject, pycairo, boto3 and Pillow into its own environment there, so it doesn't touch any other Python setup
+- downloads the draw.io web app (about 48 MB) into `drawio`, checks its SHA-256 and unpacks it, for Cloud Map's AWS icons and its offline editor
 - adds an **AWS Kit** folder to the Start menu with **AWS Kit**, **PII Redact**, **Image Redact** and **AWS Profile Picker**
 - adds Image Redact to **Open with** for PNG, JPEG, BMP and WebP files, without changing what opens them by default
 - adds `awskit`, `pii-redact` and `awsp` to your PATH for new terminals
 - adds **AWS Kit** to Settings, Apps, Installed apps, which is where you remove it
 
-To update, download the repo again and run `install-windows.cmd` again. It only downloads GTK again when the GTK version changes. Your settings stay.
+To update, download the repo again and run `install-windows.cmd` again. It only downloads GTK and draw.io again when their versions change. Your settings stay.
 
 If your network uses a proxy, set it in PowerShell and run the installer from that same window:
 
@@ -317,7 +328,7 @@ $env:HTTPS_PROXY = "http://proxy.example.com:8080"
 powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1
 ```
 
-If GitHub downloads are blocked, download `GTK4_Gvsbuild_2026.8.0_x64.zip` from the gvsbuild releases page another way and pass it in with `-GtkZip C:\path\to\it.zip`. The installer also takes `-Desktop` to add the desktop shortcut without asking, `-NoPath` to leave your PATH alone, and `-Quiet` to not ask anything.
+If GitHub downloads are blocked, download `GTK4_Gvsbuild_2026.8.0_x64.zip` from the gvsbuild releases page another way and pass it in with `-GtkZip C:\path\to\it.zip`, and the same for draw.io's `draw.war` (the link is in the installer's message) with `-DrawioZip C:\path\to\draw.war`. `-NoDrawio` skips draw.io, and Cloud Map then draws simple labels in place of the AWS icons and has no editor. The installer also takes `-Desktop` to add the desktop shortcut without asking, `-NoPath` to leave your PATH alone, and `-Quiet` to not ask anything.
 
 ### What's different on Windows
 
@@ -330,6 +341,7 @@ If GitHub downloads are blocked, download `GTK4_Gvsbuild_2026.8.0_x64.zip` from 
 | Notifications | `notify-send` | Windows notifications. They show under Windows PowerShell's name. |
 | Clipboard | `wl-copy` or `xclip` | The Windows clipboard |
 | Image Redact text detection | tesseract | The OCR built into Windows, or Tesseract if it's installed |
+| Cloud Map's draw.io editor | Inside the page, with WebKitGTK | In its own window: an Edge app window, the default browser, or draw.io desktop. GTK for Windows has no WebKitGTK. See [Editing in draw.io](../cloud-map/README.md#windows) |
 | Installing | `./install.sh` | `install-windows.cmd` |
 
 SSO sign-in from the Profiles page needs the AWS CLI v2, same as on Linux. Plan Check needs `terraform` or `tofu` on your PATH to run plans by itself.
@@ -383,7 +395,7 @@ pii-redact/                one folder per tool
 └── examples/              something to try it on
 ```
 
-Every tool folder follows the same pattern: one file with the logic, which has no GTK in it and is what the commands use, and one `_page.py` file for the window. Image Redact has two more: `imageedit.py`, the editor without a window, and `image_tk.py`, a simpler tkinter window it falls back to when GTK isn't set up. Both windows drive `imageedit.py`, so they behave the same. On Windows the GTK window is used, same as on Linux.
+Every tool folder follows the same pattern: one file with the logic, which has no GTK in it and is what the commands use, and one `_page.py` file for the window. Cloud Map splits its logic over several files (model, scan, Terraform, layout, themes, draw.io writer, renderer, icons, the editor's local server, layout memory and the designer), with `map_page.py` for its page and `map_edit.py` for editing on it. Image Redact has two more: `imageedit.py`, the editor without a window, and `image_tk.py`, a simpler tkinter window it falls back to when GTK isn't set up. Both windows drive `imageedit.py`, so they behave the same. On Windows the GTK window is used, same as on Linux.
 
 The tool folders sit next to `awskit/` instead of inside it so that each tool is easy to find on its own. To make that work, `awskit/__init__.py` adds them to the package's search path, so `pii-redact/redact.py` loads as `awskit.redact` and can use `common.py` and `widgets.py` like any file inside the package. The installer copies the folders the same way, side by side, into `~/.local/share/awskit/`.
 
@@ -396,7 +408,9 @@ pip install --user moto
 python3 -m unittest discover -s tests -v
 ```
 
-They cover PII Redact against its sample file and its settings, Image Redact's box placement, OCR cleanup, saving, renaming and moving (plus reading a real rendered screenshot when tesseract is installed), the scan and teardown logic against fake EC2, EBS, KMS, Secrets Manager and S3 resources, the audit checks, the plan and policy rules against the files in each tool's `examples/` folder, and profile parsing.
+They cover PII Redact against its sample file and its settings, Image Redact's box placement, OCR cleanup, saving, renaming and moving (plus reading a real rendered screenshot when tesseract is installed), the scan and teardown logic against fake EC2, EBS, KMS, Secrets Manager and S3 resources, the audit checks, the plan and policy rules against the files in each tool's `examples/` folder, profile parsing, and Cloud Map: its Terraform input, model, layout and draw.io output against its example states (stable IDs, byte-identical output, real draw.io shape names, flags, layers and redaction), its live scan against fake Organizations, IAM, EC2 and CloudTrail, including the AccessDenied path, the renderer behind its page and its SVG and PNG export (stable sizes, hit testing at several zoom levels, redacted SVGs, the icon reader and the draw.io download check), its designer (each check against a broken example, the generated files against a saved copy, the folder rules, and a plan of the output read back into the same map), and its editor: layout memory round trips (moved boxes, captions, colors and notes surviving a rescan with a resource added and one removed, redacted files, and a file saved by the real draw.io), the local server over HTTP (tokens, paths it refuses, saving, shutting down), `awskit map edit`, and finding Edge and the fallback order with Windows mocked.
+
+`AWSKIT_TF_TEST=1` adds a test that runs terraform or tofu on the designer's output (fmt, init, validate and an offline plan). It needs the AWS provider, from the registry or a mirror in `TF_CLI_CONFIG_FILE`. `AWSKIT_EDITOR_TEST=1` adds one more that opens the real draw.io editor in WebKitGTK, with networking blocked when `unshare` can, and checks it loads and saves without reaching anything outside the machine. It needs WebKitGTK 6.0, draw.io downloaded, and a display or `xvfb-run`.
 
 ## Troubleshooting
 

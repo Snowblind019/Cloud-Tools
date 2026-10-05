@@ -51,7 +51,7 @@ Want to try it before installing? From the root of the repo, run `python3 -m aws
 
 1. Open it with `awskit image`, from your launcher, or from the **Image Redact** page in AWS Kit.
 2. Paste a screenshot with Ctrl+V, drop an image file on it, or click **Open**.
-3. Give it a few seconds. The status bar says what got covered, like `Covered 17: 3 account IDs, 3 resource IDs, 2 names...`
+3. Give it a few seconds. The status bar says what got covered, like `Covered 17: 3 account IDs, 3 resource IDs, 2 names...` Save and Copy stay off until it's done, so the image can't go out before it's covered. If only part of the check ran, the status bar starts with `Only part of the text check ran` and says why. Click **Find PII** to try again.
 4. Look it over. Use **See through** if you want to check what's under the boxes. Cover anything it missed with the Cover tool (C), and delete any box it shouldn't have drawn.
 5. Click **Save** (Ctrl+S) or **Copy** (Ctrl+C).
 
@@ -127,7 +127,7 @@ If you drew or changed something by hand and haven't saved or copied it, it asks
 |---|---|
 | `awskit image` | Open the Image Redact window |
 | `awskit image FILE` | Open FILE in the window |
-| `awskit image FILE -o OUT` | Cover what it finds and save to OUT, without a window. OUT can be a file or a folder ending in `/`. |
+| `awskit image FILE -o OUT` | Cover what it finds and save to OUT, without a window. OUT can be a `.png` or `.jpg` file, or a folder ending in `/`. It won't save over FILE itself unless you add `--force`. |
 | `awskit image FILE --list` | Print what it would cover and where. Add `--json` for JSON. |
 | `awskit image clip` | Cover what it finds in the clipboard image and put it back, with a notification |
 | `awskit image clip -g` | Open the clipboard image in the window instead |
@@ -145,13 +145,16 @@ On WSL, `awskit image` also takes Windows paths, like `awskit image 'C:\Users\me
 3. **Runs PII Redact's rules on it.** The same patterns, with your settings.
 4. **Covers each match.** For a whole word, the box covers the word plus a little padding. For part of a word, like the account ID inside an ARN, it uses the character boxes. Those can be off by a few pixels, so the edge moves out half a character, and a quote, colon or slash next to the match gets covered too. Hiding one of those gives nothing away, and it means the match never shows at the edge.
 
-Everything runs on your machine, and the temporary files tesseract reads go in a private folder that gets deleted right after.
+Everything runs on your machine. Tesseract gets the image through stdin, so no copy of it is written to disk. Windows OCR reads it from a file in a private temporary folder, which gets deleted right after, or when the app closes if it's still reading then.
+
+If one of the passes fails, for example the one for light text on a dark background, the boxes from the passes that worked still go on, but it says only part of the text check ran. The commands print that as a warning and exit with 1, even though the file was saved.
 
 ## Things to know
 
 - **It can miss things.** OCR has trouble with tiny text, low contrast, unusual fonts, and text over pictures. Check every image before you share it.
+- **Images it opens.** PNG, JPEG, WebP, BMP, GIF and TIFF, checked by what's in the file, not its name, and up to 100 megapixels.
 - **Solid boxes only.** There's no blur or pixelate tool on purpose, since blurred text can sometimes be read back. Solid boxes can't.
-- **Lots of text takes longer.** A terminal screenshot takes a few seconds. A full screen packed with text, especially with both light and dark parts, can take 10 to 20 seconds on a slower machine. You can start drawing while it reads.
+- **Lots of text takes longer.** A terminal screenshot takes a few seconds. A full screen packed with text, especially with both light and dark parts, can take 10 to 20 seconds on a slower machine. You can start drawing while it reads, but Save and Copy wait until it's done.
 - **Other languages.** It reads English by default. For other languages, install the language data and set `language` in the settings, like `"eng+ron"`.
 
 ## Keybinds

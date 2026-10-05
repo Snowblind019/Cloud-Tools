@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Installs AWS Kit, with all eight tools, for your user. No sudo needed for this part.
+# Installs AWS Kit, with all nine tools, for your user. No sudo needed for this part.
+#
+# Options:
+#   --drawio-zip PATH   use a draw.war you already downloaded (for networks that block GitHub)
+#   --no-drawio         skip the draw.io download; Cloud Map then uses stand-in icons and
+#                       can't open its editor
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 
@@ -39,5 +44,7 @@ command -v terraform >/dev/null || command -v tofu >/dev/null || \
   echo "Note: Plan Check can only run plans itself if terraform or tofu is installed."
 command -v tesseract >/dev/null || \
   echo "Note: Image Redact needs tesseract to find text in screenshots (Fedora: sudo dnf install tesseract tesseract-langpack-eng). Drawing boxes by hand works without it."
+python3 -c 'import gi; gi.require_version("WebKit", "6.0")' 2>/dev/null || \
+  echo "Note: optional, Cloud Map edits maps right in the window with WebKitGTK 6.0 (Fedora: sudo dnf install webkitgtk6.0, Debian/Ubuntu: sudo apt install gir1.2-webkit-6.0, Arch: sudo pacman -S webkitgtk-6.0). Without it, the editor opens in its own browser window."
 
-python3 -m awskit install
+python3 -m awskit install "$@"

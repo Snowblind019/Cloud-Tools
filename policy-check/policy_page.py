@@ -24,7 +24,9 @@ class PolicyPage(Page):
         self.findings = []
         self.kind = "identity"
         self.note = ""
+        self.error = ""
         self._timer = 0
+        self._gen = 0  # bumped for every check, so a slow older one can't overwrite a newer one
 
         paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         paned.set_vexpand(True)
@@ -109,43 +111,67 @@ class PolicyPage(Page):
         self.check_local()
         return False
 
-    def parse(self):
-        doc, note = iampolicy.load_policy(self.text())
-        key = self.KIND_KEYS[self.kind_dd.get_selected()]
-        return doc, note, key or iampolicy.detect_kind(doc)
+    def clear_result(self, message):
+        self.findings = []
+        self.note = ""
+        self.error = message
+        self.result.set_text(message)
+        clear_box(self.list)
 
-    def check_local(self):
-        if not self.text().strip():
-            self.findings = []
-            self.result.set_text("Paste a policy on the left.")
-            clear_box(self.list)
+    def check_local(self, then=None):
+        """Parse and check in the background, so a huge paste can't freeze the window.
+        then(doc, kind, findings) runs after a good check."""
+        self._gen += 1
+        gen = self._gen
+        text = self.text()
+        if not text.strip():
+            self.clear_result("Paste a policy on the left.")
             return
-        try:
-            doc, self.note, self.kind = self.parse()
-        except iampolicy.PolicyError as exc:
-            self.findings = []
-            self.result.set_text(str(exc))
-            clear_box(self.list)
-            return
-        self.show(iampolicy.analyze(doc, self.kind))
+        choice = self.KIND_KEYS[self.kind_dd.get_selected()]
+
+        def work():
+            doc, note = iampolicy.load_policy(text)
+            kind = choice or iampolicy.detect_kind(doc)
+            return doc, note, kind, iampolicy.analyze(doc, kind)
+
+        def done(result):
+            if gen != self._gen:
+                return
+            doc, self.note, self.kind, findings = result
+            self.error = ""
+            self.show(findings)
+            if then:
+                then(doc, self.kind, findings)
+
+        def bad(exc):
+            if gen != self._gen:
+                return
+            if isinstance(exc, iampolicy.PolicyError):
+                self.clear_result(str(exc))
+            else:
+                self.clear_result(f"Couldn't check that: {exc or type(exc).__name__}")
+        run_bg(work, done, bad)
 
     def check_full(self):
-        self.check_local()
+        if self._timer:  # check now instead of after the typing pause
+            GLib.source_remove(self._timer)
+            self._timer = 0
         if not self.aws.get_active():
-            return
-        try:
-            doc, _, kind = self.parse()
-        except iampolicy.PolicyError:
+            self.check_local()
             return
         profile = self.win.profile
-        local = iampolicy.analyze(doc, kind)
-        self.status.busy("Asking IAM Access Analyzer...", progress=False)
 
-        def done(extra):
-            self.show(local + extra)
-            self.status.idle("Access Analyzer finished.")
-        run_bg(lambda: iampolicy.validate_with_aws(AwsContext(profile), doc, kind), done,
-               self.failed)
+        def ask_aws(doc, kind, local):
+            gen = self._gen
+            self.status.busy("Asking IAM Access Analyzer...", progress=False)
+
+            def done(extra):
+                self.status.idle("Access Analyzer finished.")
+                if gen == self._gen:  # skip it if the policy changed meanwhile
+                    self.show(local + extra)
+            run_bg(lambda: iampolicy.validate_with_aws(AwsContext(profile), doc, kind), done,
+                   self.failed)
+        self.check_local(ask_aws)
 
     def failed(self, exc):
         self.status.idle("")
@@ -184,14 +210,18 @@ class PolicyPage(Page):
             self.list.append(box)
 
     def copy_report(self):
-        if self.text().strip():
+        if self.text().strip() and not self.error:
             set_clipboard(self, iampolicy.report_text(self.findings, self.kind, self.note))
             flash(self.copy_btn, "Copied")
 
     def load_file(self, path):
         try:
+            if Path(path).stat().st_size > iampolicy.MAX_POLICY_TEXT:
+                show_message(self.win, "That file is too big",
+                             "It's over 1 MB. IAM policies are a few KB at most.")
+                return
             self.buffer.set_text(Path(path).read_text(encoding="utf-8"))
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             show_message(self.win, "Couldn't open the file", str(exc))
 
     def fetch(self):

@@ -315,9 +315,13 @@ class ImageEditor(Gtk.Box):
 
     def _update_state(self):
         have = self.ed.surface is not None
-        for w in (self.save_btn, self.copy_btn, self.name_entry, self.folder_btn):
+        # Nothing goes out while text detection is still deciding what to cover.
+        ready = have and not self.ed.finding
+        for w in (self.save_btn, self.copy_btn):
+            w.set_sensitive(ready)
+        for w in (self.name_entry, self.folder_btn):
             w.set_sensitive(have)
-        self.find_btn.set_sensitive(have and self.ocr_ok)
+        self.find_btn.set_sensitive(ready and self.ocr_ok)
         if not self.ocr_ok:
             self.find_btn.set_tooltip_text(self.ocr_msg)
         self.undo_btn.set_sensitive(bool(self.ed.undo_stack))
@@ -450,28 +454,22 @@ class ImageEditor(Gtk.Box):
     # ================================================================== detection
     def find_pii(self):
         ed = self.ed
-        if ed.png is None or not self.ocr_ok:
+        if ed.png is None or not self.ocr_ok or ed.finding:
             return
-        if ed.passes is not None:
+        if ed.passes is not None and not ed.ocr_warning:
             self._apply_boxes()
             return
-        gen, png, lang = ed.generation, ed.png, ed.cfg["language"]
-        self.find_btn.set_sensitive(False)
+        png, lang = ed.png, ed.cfg["language"]
+        gen = ed.start_finding()
+        self._update_state()
         self.set_status("Reading the text in the image...", busy=True)
 
-        def done(passes):
-            if gen != ed.generation:
-                return
-            ed.passes = passes
-            self.find_btn.set_sensitive(True)
-            self._apply_boxes()
-
-        def failed(exc):
-            if gen != ed.generation:
-                return
-            self.find_btn.set_sensitive(True)
-            self.set_status(str(exc).splitlines()[0])
-        run_bg(lambda: ir.read_text(png, lang), done, failed)
+        def finished(msg):
+            if msg is not None:
+                self._refresh()
+                self.set_status(msg)
+        run_bg(lambda: ir.read_text(png, lang), lambda passes: finished(ed.found(gen, passes)),
+               lambda exc: finished(ed.find_failed(gen, exc)))
 
     def _apply_boxes(self):
         msg = self.ed.apply_passes()
@@ -497,8 +495,9 @@ class ImageEditor(Gtk.Box):
         return False
 
     def _redact_settings_saved(self):
-        # The text was already read, so finding again with new settings is instant.
-        if self.ed.passes is not None:
+        # The text was already read, so finding again with new settings is instant. While
+        # it's being read again, the new settings apply when that's done.
+        if self.ed.passes is not None and not self.ed.finding:
             self._apply_boxes()
 
     # ================================================================== tools and style
@@ -854,6 +853,9 @@ class ImageEditor(Gtk.Box):
     def save(self):
         if self.ed.surface is None:
             return
+        if self.ed.finding:
+            self.set_status(ie.BUSY, busy=True)
+            return
         self.apply_name(quiet=True)
         plan = self.ed.plan_save()
         if plan.kind == "ask":
@@ -864,12 +866,19 @@ class ImageEditor(Gtk.Box):
     def copy(self):
         if self.ed.surface is None:
             return
+        if self.ed.finding:
+            self.set_status(ie.BUSY, busy=True)
+            return
         try:
             png = self.ed.copy_png()
+            set_clipboard_image(self, png)
         except ir.ImageError as exc:
             self.set_status(str(exc))
             return
-        set_clipboard_image(self, png)
+        except GLib.Error as exc:
+            self.set_status(f"Couldn't copy the image: {exc.message}")
+            return
+        self.ed.copied()
         self.set_status("Copied the finished image. It's ready to paste.")
 
 

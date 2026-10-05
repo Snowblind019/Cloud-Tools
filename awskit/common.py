@@ -31,6 +31,14 @@ else:
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CURRENT_PROFILE_FILE = CONFIG_DIR / "current-profile"
 
+# The draw.io web app (github.com/jgraph/drawio, Apache 2.0) that the installers download.
+# Cloud Map draws draw.io's own AWS icons from it. It isn't kept in this repo. The
+# installers read these lines, so keep them in this form. Bump all three together.
+DRAWIO_VERSION = "32.0.2"
+DRAWIO_SHA256 = "3cb8abec8e9bfc7504760c9cdc9194ecf7e8de178aa2a1d668801c32ecf1a1a7"
+DRAWIO_URL = f"https://github.com/jgraph/drawio/releases/download/v{DRAWIO_VERSION}/draw.war"
+DRAWIO_MARKER = "AWSKIT-DRAWIO-VERSION"
+
 DEFAULT_CONFIG = {
     # Resource IDs or ARNs that Lab Sweep should never offer to delete.
     "keep": [],
@@ -44,6 +52,11 @@ DEFAULT_CONFIG = {
     "timer_profiles": [],
     # SNS topic ARN for scheduled sweep summaries. Empty means desktop notification only.
     "sns_topic": "",
+    # Account IDs Cloud Map treats as yours when it can't read the org, so a role trusted
+    # by one of them isn't flagged as trusting an outside account.
+    "known_accounts": [],
+    # What the Cloud Map page showed last: snapshot, map type, filters, layers and theme.
+    "cloud_map": {},
 }
 
 
@@ -65,13 +78,70 @@ def load_config() -> dict:
 def save_config(cfg: dict) -> bool:
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = CONFIG_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        tmp.replace(CONFIG_FILE)
+        write_atomic(CONFIG_FILE, json.dumps(cfg, indent=2) + "\n", mode=0o600)
         return True
     except OSError:
         return False
+
+
+# =================================================================== files
+
+def _read_umask() -> int:
+    """The process umask, read once at startup. os.umask can only be read by setting it,
+    which would briefly change it for every thread, so this does that just once."""
+    try:
+        with open("/proc/self/status", encoding="ascii") as fh:
+            for line in fh:
+                if line.startswith("Umask:"):
+                    return int(line.split()[1], 8)
+    except (OSError, ValueError, IndexError):
+        pass
+    mask = os.umask(0o022)
+    os.umask(mask)
+    return mask
+
+
+UMASK = _read_umask()
+
+
+def write_atomic(path, data, mode=None):
+    """Write text or bytes to path so a reader never sees half a file.
+
+    The temporary file gets a new random name, created exclusively next to path, so a
+    file or link someone planted there can't redirect the write. path itself is then
+    replaced, never written through, so a link at path is swapped out rather than
+    followed. mode sets the new file's permissions (0o600 for anything secret); by
+    default an existing file keeps its permissions and a new one gets the usual ones."""
+    import stat
+    import tempfile
+    path = Path(path)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    if mode is None:
+        try:
+            st = os.lstat(path)
+            mode = stat.S_IMODE(st.st_mode) if stat.S_ISREG(st.st_mode) else None
+        except OSError:
+            mode = None
+        if mode is None:
+            mode = 0o666 & ~UMASK
+    fd, tmp = tempfile.mkstemp(prefix=".awskit-", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # =================================================================== boto3
@@ -174,6 +244,8 @@ class AwsContext:
         self._local = threading.local()
         self._identity = None
         self._lock = threading.Lock()
+        self._loader = None
+        self._loader_lock = threading.Lock()
 
     @property
     def label(self) -> str:
@@ -183,10 +255,22 @@ class AwsContext:
         sess = getattr(self._local, "session", None)
         if sess is None:
             import boto3
+            import botocore.session
+            # Every thread's session shares one loader, so each service's API model is
+            # read once per scan instead of once per thread. That's most of the CPU a scan
+            # uses, and it keeps the window smoother while a scan runs.
+            with self._loader_lock:
+                if self._loader is None:
+                    from botocore.loaders import create_loader
+                    self._loader = create_loader()
+            # The profile's own settings (endpoint, CA bundle, retries), not whatever
+            # AWS_PROFILE says, which may be another profile.
+            core = botocore.session.Session(profile=self.profile)
+            core.register_component("data_loader", self._loader)
             sess = boto3.Session(aws_access_key_id=self._frozen.access_key,
                                  aws_secret_access_key=self._frozen.secret_key,
                                  aws_session_token=self._frozen.token,
-                                 region_name=self.default_region)
+                                 region_name=self.default_region, botocore_session=core)
             self._local.session = sess
             self._local.clients = {}
         return sess
@@ -326,12 +410,24 @@ def money(value) -> str:
     return f"${value:,.0f}"
 
 
+_NUMBER = re.compile(r"^[-+]?\d+(\.\d+)?$")
+
+
+def csv_cell(value):
+    """A value that a spreadsheet won't run as a formula: text starting with = + - @ or a
+    tab gets a ' in front (names and tags come from AWS, and anyone can set those)."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r") \
+            and not _NUMBER.match(value):
+        return "'" + value
+    return value
+
+
 def to_csv(rows, columns) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow([title for _, title in columns])
+    writer.writerow([csv_cell(title) for _, title in columns])
     for row in rows:
-        writer.writerow([row.get(key, "") for key, _ in columns])
+        writer.writerow([csv_cell(row.get(key, "")) for key, _ in columns])
     return buf.getvalue()
 
 
@@ -467,8 +563,52 @@ def prepare_gtk_env():
         os.environ.setdefault("GDK_DISABLE", "gl,vulkan")
 
 
+def data_dir() -> Path:
+    """Where the installers put AWS Kit: ~/.local/share/awskit, or %LOCALAPPDATA%\\AWSKit."""
+    if os.name == "nt":
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "AWSKit"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "awskit"
+
+
+def drawio_dir() -> Path:
+    """The downloaded draw.io web app. AWSKIT_DRAWIO points somewhere else."""
+    if os.environ.get("AWSKIT_DRAWIO"):
+        return Path(os.environ["AWSKIT_DRAWIO"])
+    return data_dir() / "drawio"
+
+
+def drawio_installed(folder=None):
+    """The draw.io version unpacked in folder (or the usual place), or "" if it's not there."""
+    folder = Path(folder) if folder else drawio_dir()
+    if not (folder / "index.html").is_file():
+        return ""
+    try:
+        return (folder / DRAWIO_MARKER).read_text(encoding="ascii").strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
 def windows_tool(name: str):
-    """Find a Windows program from WSL, even when the Windows PATH isn't shared."""
+    """Find a Windows program from WSL, even when the Windows PATH isn't shared. On
+    Windows itself, System32 comes first and the current folder is never searched, so a
+    program of the same name sitting in it can't be run by mistake."""
+    if os.name == "nt":
+        root = os.environ.get("SystemRoot") or os.environ.get("windir") or r"C:\Windows"
+        for folder in (os.path.join(root, "System32"),
+                       os.path.join(root, "System32", "WindowsPowerShell", "v1.0")):
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                return path
+        here = os.path.normcase(os.path.abspath(os.getcwd()))
+        for folder in os.environ.get("PATH", "").split(os.pathsep):
+            folder = folder.strip().strip('"')
+            if not folder or not os.path.isabs(folder) or \
+                    os.path.normcase(os.path.abspath(folder)) == here:
+                continue
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                return path
+        return None
     found = shutil.which(name)
     if found:
         return found

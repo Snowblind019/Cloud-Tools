@@ -8,6 +8,7 @@ redact_page.py. Run `pii-redact --help` (same as `awskit redact --help`) for eve
 from __future__ import annotations
 
 import argparse
+import bisect
 import getpass
 import ipaddress
 import json
@@ -24,7 +25,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .common import (CONFIG_DIR, VERSION, ClipboardError, notify, read_clipboard,
-                     write_clipboard)
+                     write_atomic, write_clipboard)
 
 CONFIG_FILE = CONFIG_DIR / "redact.json"
 _CONFIG_HOME = CONFIG_DIR.parent
@@ -126,7 +127,18 @@ def mixed_charset(s: str) -> bool:
 
 
 def secret_40_check(s):
-    return mixed_charset(s) and entropy(s) >= 4.2  # AWS secret keys, not file paths
+    if mixed_charset(s):
+        return entropy(s) >= 4.2  # AWS secret keys, not file paths
+    # About 1 real key in 900 has no digit at all. Without one, ask for a fair mix of both
+    # cases with lots of switching between them, which camelCase names, long words and
+    # paths don't have.
+    letters = [c for c in s if c.isalpha()]
+    upper = sum(c.isupper() for c in letters)
+    if not letters or not 0.25 <= upper / len(letters) <= 0.75:
+        return False
+    flips = sum(1 for a, b in zip(s, s[1:])
+                if a.isalpha() and b.isalpha() and a.isupper() != b.isupper())
+    return flips >= 13 and entropy(s) >= 4.3
 
 
 def long_token_check(s):
@@ -174,6 +186,11 @@ def email_check(s):
     return local.lower() != "git" and not domain.lower().endswith("openssh.com")
 
 
+def url_creds_check(s):
+    # https://host:8443/path@x is a host, port and path, not user:password
+    return not re.match(r"\d{1,5}(?:[/?#]|$)", s.partition(":")[2])
+
+
 # =================================================================== rules
 
 @dataclass
@@ -192,6 +209,14 @@ def R(cat, label, pattern, group=0, check=None, flags=0):
 B = r"(?<![\w-])"  # word start, counting - as part of the word
 E = r"(?![\w-])"   # word end, same idea
 REGION = r"[a-z]{2}(?:-gov)?-[a-z]+-\d"
+# One or more line breaks, real ones or \n written inside a JSON string
+GAP = r"(?:[ \t]*(?:\r?\n|\\r\\n|\\n))+[ \t]*"
+# A whole line of base64, ending at a line break (real or written) or a closing quote
+B64_LINE = r"[A-Za-z0-9+/=]+(?=[ \t]*(?:\r?\n|\\[rn]|[\"'](?=[\s,;)\]}]|\Z)|\Z))"
+# A value after -p or --password: quoted, or up to the next space
+FLAG_VALUE = r"'[^'\n]*'|\"[^\"\n]*\"|[^\s\"'-][^\s\"']*"
+# A URL query string value, up to the next &
+QUERY_VALUE = r"([^&\s\"'<>#\\,]+)"
 EC2_PREFIXES = (
     "i|vpc|subnet|sg|sgr|igw|eigw|nat|rtb|rtbassoc|acl|aclassoc|eni|eni-attach|vol|snap|ami|"
     "eipalloc|eipassoc|vpce|vpce-svc|pcx|tgw|tgw-attach|tgw-rtb|lt|dopt|cgw|vgw|vpn|fs|fsap|"
@@ -204,6 +229,16 @@ RULES = [
     R("private_keys", "PrivateKey",
       r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?"
       r"-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----", flags=re.S),
+    # A key pasted without its END line: the header lines and base64 lines after BEGIN,
+    # up to the first line that isn't base64. Also catches a key flattened onto one line.
+    R("private_keys", "PrivateKey",
+      r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----"
+      r"(?:" + GAP + r"[A-Za-z][\w-]*:[ \t][^\r\n\\]*)*"
+      r"(?:" + GAP + B64_LINE + r"|[ \t]+[A-Za-z0-9+/=]{16,}(?![A-Za-z0-9+/=]))*"),
+    # PuTTY .ppk files
+    R("private_keys", "PrivateKey",
+      r"\bPrivate-Lines:[ \t]*\d+" + GAP + "(" + B64_LINE + "(?:" + GAP + B64_LINE + ")*)",
+      group=1),
     R("ssh_keys", "SSHKey",
       r"\b(?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-nistp\d{3}|sk-ssh-ed25519@openssh\.com)"
       r"[ \t]+(AAAA[A-Za-z0-9+/=]{20,}(?:[ \t]+[^\s\"',]+)?)", group=1),
@@ -214,18 +249,42 @@ RULES = [
       r"|sk-ant-[A-Za-z0-9_-]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}"
       r"|AIza[0-9A-Za-z_-]{35}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,})"),
     R("tokens", "Token", r"\b[A-Za-z0-9]{14}\.atlasv1\.[A-Za-z0-9_-]{60,}"),
+    # Authorization: Bearer ... and Basic ... headers, JWT or not
+    R("tokens", "Token",
+      r"(?<![\w-])(?:Proxy-)?Authorization\\?[\"']?[ \t]*[:=][ \t]*\\?[\"']?[ \t]*"
+      r"(?:Bearer|Basic|Token|Negotiate|NTLM|ApiKey|Api-Key|SSWS)[ \t]+([^\s\"'\\,;]+)",
+      group=1, flags=re.I),
 
     R("aws_keys", "AccessKey", r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"),
     R("iam_ids", "IAMUniqueID",
       r"(?<![A-Z0-9])(?:ABIA|ACCA|AGPA|AIDA|AIPA|ANPA|ANVA|APKA|AROA|ASCA)[A-Z0-9]{16,}"
       r"(?![A-Z0-9])"),
     R("aws_keys", "SessionToken",
-      r"(?<![A-Za-z0-9/+=])(?:IQoJb3JpZ2lu|FwoGZXIvYXdz|FQoGZXIvYXdz)[A-Za-z0-9/+=]{40,}"),
+      r"(?<![A-Za-z0-9/+])(?:IQoJb3JpZ2lu|FwoGZXIvYXdz|FQoGZXIvYXdz)[A-Za-z0-9/+=]{40,}"),
+    # Presigned URLs. %2F and %2B cut the session token into short pieces, so the whole
+    # parameter goes.
+    R("aws_keys", "SessionToken", r"(?<![\w-])X-Amz-Security-Token=" + QUERY_VALUE, group=1,
+      flags=re.I),
+    R("aws_keys", "AccessKey",
+      r"(?<![\w-])X-Amz-Credential=([A-Za-z0-9]{16,128})(?=%2F|/|&|\s|$)", group=1, flags=re.I),
+    R("aws_keys", "Signature", r"(?<![\w-])(?:X-Amz-)?Signature=" + QUERY_VALUE, group=1,
+      flags=re.I),
     R("tokens", "Token", r"(?<![A-Za-z0-9/+=_-])[A-Za-z0-9/+=_-]{100,}(?![A-Za-z0-9/+=_-])",
       check=long_token_check),
-    R("aws_keys", "SecretKey", r"(?<![A-Za-z0-9/+=])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])",
+    # A secret key can come right after = (MY_KEY=...) or after a \n written in JSON
+    R("aws_keys", "SecretKey",
+      r"(?:(?<=\\[nrt])|(?<![A-Za-z0-9/+]))[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])",
       check=secret_40_check),
-    R("url_creds", "Credentials", r"(?<=://)[^/\s:@\"']+:[^/\s@\"']+(?=@)"),
+    R("url_creds", "Credentials", r"(?<=://)[^/\s:@\"']{1,256}:[^\s@\"']{1,256}(?=@)",
+      check=url_creds_check),
+    # Passwords given on the command line: mysql -pSECRET, docker login -p SECRET and
+    # mongosh -p SECRET. --password SECRET is handled with the other settings.
+    R("secret_values", "Secret",
+      r"\b(?:mysql|mysqldump|mysqladmin|mysqlimport|mysqlcheck|mysqlshow|mysqlpump|mariadb)"
+      r"\b[^\n]{0,400}?[ \t]-p(" + FLAG_VALUE + ")", group=1),
+    R("secret_values", "Secret",
+      r"(?<![\w-])(?:login|mongo|mongosh|mongodump|mongorestore|mongoexport|mongoimport)"
+      r"(?=[ \t])[^\n]{0,400}?[ \t]-p[ \t]+(" + FLAG_VALUE + ")", group=1),
 
     R("iam_names", "IAMUser", r"\barn:aws[\w-]*:iam::[^:\s]*:user/([\w+=,.@/-]+)", group=1),
     R("iam_names", "SessionName", r":assumed-role/[\w+=,.@-]+/([\w+=,.@-]+)", group=1),
@@ -250,16 +309,18 @@ RULES = [
     R("aws_hostnames", "Hostname", r"\b([a-z0-9]{10})\.execute-api\.", group=1),
     R("aws_hostnames", "Hostname", r"\b([a-z0-9]{20,40})\.lambda-url\.", group=1),
     R("aws_hostnames", "Hostname", r"\b([a-z0-9]+)\.cloudfront\.net\b", group=1),
-    R("aws_hostnames", "Hostname", r"\b([a-z0-9][a-z0-9-]*)\.awsapps\.com\b", group=1),
+    R("aws_hostnames", "Hostname", r"\b([a-z0-9][a-z0-9-]{0,62})\.awsapps\.com\b", group=1),
     R("aws_hostnames", "Hostname", rf"\.([a-z0-9]{{12}})\.{REGION}\.rds\.amazonaws\.com", group=1),
     R("aws_hostnames", "Hostname",
-      rf"\b((?:internal-)?[\w-]+-\d+)\.{REGION}\.elb\.amazonaws\.com", group=1),
+      rf"\b((?:internal-)?[\w-]{1,62}-\d{1,20})\.{REGION}\.elb\.amazonaws\.com", group=1),
     R("buckets", "Bucket", r"(?<=s3://)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"),
     R("buckets", "Bucket", r"(?<=arn:aws:s3:::)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"),
     R("buckets", "Bucket",
       r"\b([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])\.s3[.-](?:[a-z0-9-]+\.)?amazonaws\.com", group=1),
 
-    R("emails", "Email", r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", check=email_check),
+    # Lengths are capped at what email allows, so long runs of dots or dashes stay fast
+    R("emails", "Email", r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b",
+      check=email_check),
     R(None, "IPv6", r"(?<![\w:.])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![\w:])",
       check=ipv6_check),
     R(None, "IPv4", r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?!\w|\.\d)", check=ipv4_check),
@@ -287,7 +348,7 @@ _KEY_GROUPS = {
         "awssecretaccesskey clientsecret accesskey accesskeyid awsaccesskeyid sessiontoken "
         "awssessiontoken securitytoken token accesstoken refreshtoken authtoken idtoken "
         "bearertoken apikey apitoken privatekey masterpassword adminpassword dbpassword "
-        "rootpassword",
+        "rootpassword secretstring",
     ("account_ids", "AccountID"): "accountid account awsaccountid ownerid requesterid",
     ("names", "Owner"): "owner",
     ("names", "User"): "username user userid masterusername displayname principalid",
@@ -301,17 +362,93 @@ _KEY_GROUPS = {
     ("gov_ids", "DOB"): "dob dateofbirth",
 }
 SENSITIVE_KEYS = {k: cat_label for cat_label, keys in _KEY_GROUPS.items() for k in keys.split()}
+SECRET_HIT = ("secret_values", "Secret")
+
+# Any other setting whose name ends like this holds a secret too, so DATABASE_PASSWORD,
+# MasterUserPassword, PGPASSWORD, JWT_SECRET, DB_PASS and x-api-key all count.
+SECRET_ENDINGS = ("password", "passwd", "passphrase", "pwd", "pass", "secret", "secretkey",
+                  "secretaccesskey", "token", "apikey", "privatekey", "credential",
+                  "credentials", "auth", "accesskey", "accesskeyid")
+# Endings that don't change what the setting holds, like Terraform's write-only
+# password_wo, or secret_value and private_key_pem
+SECRET_QUALIFIERS = re.compile(r"(?:wo|value|string|b64|base64|pem|openssh|pkcs8|plaintext"
+                               r"|raw|hash)+$")
+# Names that end like a secret but aren't one: paging and request tokens, sudoers rules
+NOT_SECRETS = {"nexttoken", "nextcontinuationtoken", "continuationtoken", "paginationtoken",
+               "startingtoken", "nextpagetoken", "pagetoken", "clienttoken", "idempotencytoken",
+               "bypass", "proxybypass", "compass", "nopasswd", "nopassword", "iamauth",
+               "oldpwd"}
+
+
+def key_norm(key):
+    """A setting name compared without case, _ or -, and without a prefix like var.x."""
+    return key.split(".")[-1].lower().replace("_", "").replace("-", "")
+
+
+def secret_name(norm):
+    if norm in NOT_SECRETS:
+        return False
+    base = SECRET_QUALIFIERS.sub("", norm) or norm
+    return base not in NOT_SECRETS and base.endswith(SECRET_ENDINGS)
+
+
+def key_hit(norm):
+    return SENSITIVE_KEYS.get(norm) or (SECRET_HIT if secret_name(norm) else None)
+
 
 KV_RE = re.compile(
-    r"""(?P<kq>["']?)(?P<key>[A-Za-z_][\w.-]*)(?P=kq)[ \t]*[=:][ \t]*"""
-    r"""(?:(?P<q>["'])(?P<qval>(?:\\.|(?!(?P=q))[^\\\n])*)(?P=q)"""
-    r"""|(?P<val>[^\s,;{}\[\]()#"'][^\s,;{}\[\]()#"']*))"""
-    r"""(?:[ \t]*->[ \t]*(?P<q2>["'])(?P<qval2>(?:\\.|(?!(?P=q2))[^\\\n])*)(?P=q2))?"""
+    # A key starts a word, or a flag like --password=x or -Dpassword=x, or follows a \n
+    # written inside a JSON string. Not after a colon, so the parts of an ARN aren't
+    # keys. Keys can be quoted, also with escaped quotes like \"password\" inside a
+    # JSON string that holds JSON.
+    r"""(?:(?<=\\[nrt])|(?<=--)|(?<=[\s"'=(]-)|(?<![\w.\\:-]))"""
+    r"""(?P<kq>\\?["']|)(?P<key>[A-Za-z_][\w.-]{0,199})(?P=kq)"""
+    r"""[ \t]*(?P<sep>:=|=>|[=:])[ \t]*"""
+    r"""(?:(?P<q>\\?["'])(?P<qval>(?:(?!(?P=q))(?:\\.|[^\\\n]))*)(?P=q)"""
+    # An unquoted value is only measured (with VALUE_WORD) when the key matters, so a
+    # long value isn't read again for every = or : inside it
+    r"""|(?P<val>(?=[^\s,;{}\[\]"'\\]|\\(?![nrt"']))))"""
+)
+VALUE_WORD = re.compile(r"""(?:[^\s,;{}\[\]"'\\]|\\(?![nrt"']))"""
+                        r"""(?:[^\s,;{}\[\]()#"'\\]|\\(?![nrt"']))*""")
+# Terraform's "old" -> "new"
+ARROW = re.compile(r"""[ \t]*->[ \t]*(?P<q>["'])(?P<qval>(?:(?!(?P=q))(?:\\.|[^\\\n]))*)(?P=q)""")
+# --password SECRET and similar command line flags, with a space instead of =
+FLAG_RE = re.compile(
+    r"""(?<![\w-])--(?P<key>[A-Za-z][\w-]{0,63})[ \t]+"""
+    r"""(?:(?P<q>["'])(?P<qval>(?:(?!(?P=q))(?:\\.|[^\\\n]))*)(?P=q)"""
+    r"""|(?P<val>[^\s"'\\-][^\s"']*))"""
 )
 # Terraform references like var.x or aws_s3_bucket.logs.id are names, not data
 TF_REF = re.compile(r"^(?:var|local|data|module|each|count|self|path|terraform)\.[\w.\[\]\"*-]+$"
                     r"|^[a-z][a-z0-9_]*\.[a-z0-9_-]+\.[\w.\[\]\"*-]+$")
 SKIP_VALUES = {"", "null", "none", "nil", "true", "false", "*", "undefined"}
+# Terraform progress lines like random_password.db: Creating...
+TF_STATUS = re.compile(r"(?:Creating|Creation complete|Modifying|Modifications complete"
+                       r"|Destroying|Destruction complete|Refreshing state|Reading|Read complete"
+                       r"|Still \w+ing|Importing|Import (?:prepared|complete)|Preparing import)\b")
+# Values that point at a secret instead of holding one: ${var.x} and {{ vault_pw }}
+TEMPLATE = re.compile(r"\$\{[^}]*\}|^\{\{.*\}\}$")
+# Unquoted values that are code: (sensitive value) and other Terraform placeholders,
+# function calls like jsonencode({ or os.getenv("X") or file(var.path), $(command) and
+# CloudFormation tags like !Ref. A password like Abc(123xyz isn't any of these.
+CODE = re.compile(r"""^\([^()]*\)|^\$\(|^[A-Za-z_][\w.]*\((?:[{\["'$)]|$)"""
+                  r"""|^[a-z_][\w.]*\(.*\)[,;]?$"""
+                  r"""|^!(?:Ref|Sub|GetAtt|ImportValue|Join|If|Select|FindInMap|Base64|Split"""
+                  r"""|GetAZs|Cidr|Transform)\b""")
+# A SigV4 credential scope (AKIA.../20261004/us-east-1/s3/aws4_request): the access key
+# rules take the key and leave the date, region and service readable
+CRED_SCOPE = re.compile(r"[A-Z0-9]{16,128}(?:/|%2F)\d{8}(?:/|%2F)", re.I)
+# What can come before KEY=value at the start of a line: indentation, export or set,
+# a list dash, a comment mark, or Terraform's + ~ - markers
+LINE_LEAD = re.compile(r"[ \t]*(?:(?:export|set|setx|readonly|local|declare[ \t]+-x)[ \t]+"
+                       r"|\$env:|(?://|[-+~*#>;])[ \t]*)*", re.I)
+# An inline secret runs to the next space, quote, comma or semicolon (connection strings
+# put ; between settings), and in a URL query string to the next &
+SECRET_WORD = re.compile(r"""(?:[^\s,;"'\\]|\\(?![nrt"']))+""")
+QUERY_WORD = re.compile(r"""(?:[^\s,;"'\\&#]|\\(?![nrt"']))+""")
+# The rest of a line written inside a JSON string, up to the next \n or closing quote
+ESCAPED_REST = re.compile(r"""(?:[^\\"\r\n]|\\(?![nr"]))*""")
 
 # Terminal color codes would hide values from the patterns, so they get stripped first
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
@@ -328,24 +465,97 @@ def _kv_value_ok(value, quoted, placeholder):
     return True
 
 
+def _secret_value_ok(value, quoted, placeholder, first=None):
+    """Like _kv_value_ok, for passwords and keys. first is the value's first word."""
+    v = value.strip()
+    first = (first or v).strip()
+    if v.lower() in SKIP_VALUES or first.lower() in SKIP_VALUES or f"[{placeholder}" in v:
+        return False
+    if v.startswith("arn:") or CRED_SCOPE.match(v) or TEMPLATE.search(v):
+        return False
+    if not quoted and (TF_REF.match(first) or CODE.search(v)):
+        return False
+    return True
+
+
+def _trim_closers(value):
+    """Drop a ) ] or } at the end that closes something outside the value, like f(pw=x)."""
+    while value and value[-1] in ")]}":
+        opener = "([{"[")]}".index(value[-1])]
+        if value.count(value[-1]) <= value.count(opener):
+            break
+        value = value[:-1]
+    return value
+
+
+def _secret_end(text, m):
+    """Where an unquoted secret ends. On a KEY=value or key: value line it's the end of
+    the line, so a space, # or ( in the password doesn't cut it short. Inline, it's the
+    end of the word."""
+    start, key_start = m.start("val"), m.start()
+    if text.endswith("\\n", 0, key_start) or text.endswith("\\r", 0, key_start):
+        rest = ESCAPED_REST.match(text, start).group()  # a line inside a JSON string
+        return start + len(rest.rstrip(" \t"))
+    # Only look back a little way for the line start, so long lines stay fast
+    line_start = text.rfind("\n", max(0, key_start - 200), key_start) + 1
+    if (line_start or key_start <= 200) and LINE_LEAD.fullmatch(text, line_start, key_start):
+        end = text.find("\n", start)
+        end = len(text) if end < 0 else end
+        while end > start and text[end - 1] in " \t\r":
+            end -= 1
+        return end
+    query = m.group("sep") == "=" and text[key_start - 1:key_start] in ("?", "&")
+    word = (QUERY_WORD if query else SECRET_WORD).match(text, start).group()
+    return start + len(_trim_closers(word))
+
+
 def kv_spans(text, prio, placeholder):
     spans = []
-    for m in KV_RE.finditer(text):
-        norm = m.group("key").split(".")[-1].lower().replace("_", "").replace("-", "")
-        hit = SENSITIVE_KEYS.get(norm)
-        if not hit:
+    pos = 0
+    while True:
+        m = KV_RE.search(text, pos)
+        if m is None:
+            break
+        key, quoted = m.group("key"), m.group("q") is not None
+        value_start = m.start("qval") if quoted else m.start("val")
+        hit = key_hit(key_norm(key))
+        if (hit and "." in key and m.group("sep") == ":"
+                and TF_STATUS.match(text, m.start("q" if quoted else "val"))):
+            hit = None  # random_password.db: Creating... is a Terraform address
+        found = []
+        if hit:
+            secret = hit == SECRET_HIT
+            ok = _secret_value_ok if secret else _kv_value_ok
+            if quoted:
+                if ok(m.group("qval"), True, placeholder):
+                    found.append((m.start("qval"), m.end("qval")))
+                word_end = m.end()
+            else:
+                word_end = VALUE_WORD.match(text, value_start).end()
+                word = text[value_start:word_end]
+                if secret:
+                    end = _secret_end(text, m)
+                    if ok(text[value_start:end], False, placeholder, word):
+                        found.append((value_start, end))
+                # jsonencode(...) and other function calls aren't data
+                elif text[word_end:word_end + 1] != "(" and ok(word, False, placeholder):
+                    found.append((value_start, word_end))
+            arrow = ARROW.match(text, word_end)
+            if arrow and ok(arrow.group("qval"), True, placeholder):
+                found.append(arrow.span("qval"))
+        spans.extend((s, e, prio) + hit for s, e in found)
+        # Carry on after a redacted value. Otherwise look inside the value too, since it
+        # can hold more settings, like the JSON in a SecretString or an SSM parameter.
+        pos = max(e for _, e in found) if found else value_start
+
+    for m in FLAG_RE.finditer(text):
+        norm = key_norm(m.group("key"))
+        # curl --anyauth and similar take no value
+        if norm.endswith("auth") or key_hit(norm) != SECRET_HIT:
             continue
-        cat, label = hit
-        if m.group("val") is not None:
-            end = m.end("val")
-            if end < len(text) and text[end] == "(":
-                continue  # function call like jsonencode(...)
-            if _kv_value_ok(m.group("val"), False, placeholder):
-                spans.append((m.start("val"), end, prio, cat, label))
-        elif m.group("qval") is not None and _kv_value_ok(m.group("qval"), True, placeholder):
-            spans.append((m.start("qval"), m.end("qval"), prio, cat, label))
-        if m.group("qval2") is not None and _kv_value_ok(m.group("qval2"), True, placeholder):
-            spans.append((m.start("qval2"), m.end("qval2"), prio, cat, label))
+        group = "qval" if m.group("q") is not None else "val"
+        if _secret_value_ok(m.group(group), group == "qval", placeholder):
+            spans.append((m.start(group), m.end(group), prio) + SECRET_HIT)
     return spans
 
 
@@ -398,12 +608,18 @@ def find_spans(text: str, opts: Options) -> list:
                 spans.append((s, e, prio, cat, rule.label))
     spans.extend(sp for sp in kv_spans(text, len(rules), opts.placeholder) if sp[3] in opts.enabled)
 
-    # Anything inside a never-redact match stays visible
+    # Anything inside a never-redact match stays visible. The matches don't overlap and
+    # come in order, so the only one that can hold a span is the last one starting
+    # at or before it.
     never = word_regex(opts.never)
     if never:
         protected = [m.span() for m in never.finditer(text)]
-        spans = [sp for sp in spans
-                 if not any(ps <= sp[0] and sp[1] <= pe for ps, pe in protected)]
+        starts = [ps for ps, _ in protected]
+
+        def visible(sp):
+            i = bisect.bisect_right(starts, sp[0]) - 1
+            return i < 0 or sp[1] > protected[i][1]
+        spans = [sp for sp in spans if visible(sp)]
 
     # Earliest start wins, then the longest match, then rule order
     spans.sort(key=lambda t: (t[0], -(t[1] - t[0]), t[2]))
@@ -526,10 +742,8 @@ def load_config():
 def save_config(cfg) -> bool:
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = CONFIG_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-        tmp.chmod(0o600)
-        os.replace(tmp, CONFIG_FILE)
+        # The word lists can hold names and employers, so only the owner can read it
+        write_atomic(CONFIG_FILE, json.dumps(cfg, indent=2) + "\n", mode=0o600)
         return True
     except OSError:
         return False
@@ -651,7 +865,9 @@ def cmd_run(command, cfg, args):
     if not command:
         sys.exit("pii-redact: run needs a command, like: pii-redact run terraform plan")
     if sys.stderr.isatty():
-        print(f"Running {' '.join(command)} (output shows when it finishes)", file=sys.stderr)
+        # The command line can hold a password or key too, so it gets the same treatment
+        shown, _, _ = redact(" ".join(command), options_from(cfg, args))
+        print(f"Running {shown} (output shows when it finishes)", file=sys.stderr)
     try:
         proc = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     except FileNotFoundError:

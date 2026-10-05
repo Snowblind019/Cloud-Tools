@@ -23,12 +23,35 @@ def aws_credentials_path() -> Path:
                 or Path.home() / ".aws" / "credentials")
 
 
+# A section name nothing uses, for settings above the first [section]
+_PREAMBLE = "\0awskit-preamble"
+
+
+def _new_parser() -> configparser.RawConfigParser:
+    # strict=False: a repeated [profile x] or setting doesn't stop the read and hide every
+    # profile after it. The sections merge and the later setting wins.
+    return configparser.RawConfigParser(strict=False)
+
+
 def _read_ini(path: Path) -> configparser.RawConfigParser:
-    parser = configparser.RawConfigParser()
+    parser = _new_parser()
     try:
-        parser.read(path, encoding="utf-8")
-    except (OSError, configparser.Error):
-        pass
+        # utf-8-sig skips the byte order mark Notepad adds on Windows
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return parser
+    try:
+        parser.read_string(text, source=str(path))
+    except configparser.MissingSectionHeaderError:
+        # Settings above the first [section] belong to no profile. Read past them.
+        parser = _new_parser()
+        try:
+            parser.read_string(f"[{_PREAMBLE}]\n" + text, source=str(path))
+        except configparser.Error:
+            pass  # bad lines are skipped, everything else is still read
+        parser.remove_section(_PREAMBLE)
+    except configparser.Error:
+        pass  # bad lines are skipped, everything else is still read
     return parser
 
 
@@ -125,7 +148,7 @@ def _sso_cache_dir() -> Path:
 
 
 def _parse_expiry(text):
-    if not text:
+    if not text or not isinstance(text, str):
         return None
     text = text.replace("UTC", "+00:00").replace("Z", "+00:00")
     try:
@@ -152,6 +175,8 @@ def sso_expiry(profile: dict):
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if not isinstance(data, dict):
+            continue  # not a token file, or a damaged one
         dt = _parse_expiry(data.get("expiresAt"))
         if dt:
             return dt
@@ -190,8 +215,17 @@ def check_profile(name) -> dict:
         return {"status": status, "message": msg}
 
 
+# Letters, numbers and . _ - @ + = , / only. On Windows aws is often aws.cmd, which runs
+# through cmd.exe, so a name with " & | % or similar could run other commands.
+SAFE_PROFILE_NAME = re.compile(r"[\w.@+=,/-]+")
+
+
 def sso_login(name, timeout=600) -> tuple:
     """Run aws sso login for a profile. Opens the browser. Returns (ok, message)."""
+    if not isinstance(name, str) or not SAFE_PROFILE_NAME.fullmatch(name):
+        return False, (f"Can't sign in to {name!r}: profile names for sign-in can only use "
+                       "letters, numbers and . _ - @ + = , /. Rename the profile in "
+                       f"{aws_config_path()} and try again.")
     aws = shutil.which("aws")
     if not aws:
         return False, ("The AWS CLI isn't installed, and it's needed for SSO sign-in. "

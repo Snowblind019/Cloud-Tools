@@ -6,6 +6,7 @@ AWS's own findings.
 from __future__ import annotations
 
 import ast
+import ipaddress
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -133,6 +134,22 @@ LIMITING_KEYS = {
     "lambda:functionurlauthtype", "sns:endpoint", "elasticfilesystem:accesspointarn",
 }
 
+# Condition operators that only let in requests whose value matches. Not* operators let in
+# everyone else, Null only checks whether the key is there, and ...IfExists and
+# ForAllValues: also pass when the key is missing, which it is for anonymous callers.
+POSITIVE_OPERATORS = {"stringequals", "stringequalsignorecase", "stringlike", "arnequals",
+                      "arnlike", "ipaddress"}
+WILDCARD_OPERATORS = {"stringlike", "arnequals", "arnlike"}  # these treat * and ? as wildcards
+
+# Services whose ARNs end in the resource's name, with no resource type in front.
+NAME_ONLY_SERVICES = {"s3", "sqs", "sns", "codecommit"}
+
+GITHUB_SUB = "token.actions.githubusercontent.com:sub"
+
+MAX_POLICY_TEXT = 1024 * 1024  # IAM policies are a few KB at most
+MAX_POLICY_DEPTH = 32          # a real policy is about 6 levels deep
+TOO_DEEP = "That's nested too deeply to be a policy."
+
 
 # ------------------------------------------------------------------ loading
 
@@ -163,11 +180,24 @@ def _unwrap(obj):
             if isinstance(cur, str):
                 try:
                     cur = json.loads(unquote(cur) if cur.lstrip().startswith("%") else cur)
-                except ValueError:
+                except (ValueError, RecursionError):
                     continue
             if isinstance(cur, dict):
                 return cur, f"Read the policy out of {note}."
     return obj, ""
+
+
+def _too_deep(obj, limit=MAX_POLICY_DEPTH) -> bool:
+    stack = [(obj, 1)]
+    while stack:
+        cur, depth = stack.pop()
+        if depth > limit:
+            return True
+        if isinstance(cur, dict):
+            stack += [(v, depth + 1) for v in cur.values()]
+        elif isinstance(cur, (list, tuple)):
+            stack += [(v, depth + 1) for v in cur]
+    return False
 
 
 def load_policy(text: str) -> tuple:
@@ -175,21 +205,32 @@ def load_policy(text: str) -> tuple:
     raw = (text or "").strip()
     if not raw:
         raise PolicyError("Paste a policy first.")
+    if len(raw) > MAX_POLICY_TEXT:
+        raise PolicyError("That's over 1 MB. IAM policies are a few KB at most, so this "
+                          "isn't one.")
     if raw.startswith("%7B") or raw.startswith("%7b"):
         raw = unquote(raw)
     doc = None
     try:
         doc = json.loads(raw)
+    except RecursionError:
+        raise PolicyError(TOO_DEEP) from None
     except ValueError as json_err:
         try:
             doc = ast.literal_eval(raw)
-        except (ValueError, SyntaxError):
+        except RecursionError:
+            raise PolicyError(TOO_DEEP) from None
+        except (ValueError, TypeError, SyntaxError, MemoryError):
+            # TypeError: a printed dict with a list as a key, like {[1]: 2}
             line = getattr(json_err, "lineno", None)
             where = f" (line {line})" if line else ""
-            raise PolicyError(f"That isn't valid JSON{where}: {json_err.msg}") from None
+            msg = getattr(json_err, "msg", str(json_err))
+            raise PolicyError(f"That isn't valid JSON{where}: {msg}") from None
     if isinstance(doc, str):  # JSON string holding JSON
         try:
             doc = json.loads(doc)
+        except RecursionError:
+            raise PolicyError(TOO_DEEP) from None
         except ValueError:
             raise PolicyError("That's a plain string, not a policy.") from None
     doc, note = _unwrap(doc)
@@ -197,6 +238,8 @@ def load_policy(text: str) -> tuple:
         raise PolicyError("A policy should be a JSON object with a Statement list.")
     if "Statement" not in doc:
         raise PolicyError("No Statement found. Is this the whole policy?")
+    if _too_deep(doc):
+        raise PolicyError(TOO_DEEP)
     return doc, note
 
 
@@ -249,23 +292,38 @@ def listing(hits: dict, limit=5) -> str:
     return text
 
 
+def has_wildcard(text) -> bool:
+    return "*" in text or "?" in text
+
+
 def is_broad_resource(resources) -> bool:
     for r in resources:
-        r = str(r)
-        if r == "*":
+        r = str(r).strip()
+        if r and not r.strip("*?"):
+            return True                                  # "*"
+        parts = r.split(":", 5)
+        if parts[0] != "arn":
+            continue
+        if len(parts) < 6:
+            if has_wildcard(parts[-1]):
+                return True                              # arn:*, arn:aws:*, arn:aws:ec2:*:*
+            continue
+        _, partition, service, _region, account, res = parts
+        # Any partition, service or account. The region doesn't matter much.
+        if has_wildcard(partition) or has_wildcard(service) or has_wildcard(account):
             return True
-        if re.fullmatch(r"arn:aws[\w-]*:[^:]*:[^:]*:[^:]*:\*", r):
-            return True
-        if re.fullmatch(r"arn:aws[\w-]*:[^:]+:\*(:\*)*", r):
-            return True
-        if r in ("arn:aws:s3:::*", "arn:aws:s3:::*/*"):
-            return True
-        if re.fullmatch(r"arn:aws[\w-]*:iam::\d{12}:role/\*", r):
-            return True
-        # Every resource of one type, like user/* or function:*. A bucket's objects
-        # (arn:aws:s3:::bucket/*) don't count, that's one bucket.
-        if not r.startswith("arn:aws:s3:") and re.fullmatch(
-                r"arn:aws[\w-]*:[^:]+:[^:]*:[^:]*:[\w-]+[/:]\*", r):
+        if res and not res.strip("*?"):
+            return True                                  # arn:aws:iam::111111111111:*
+        if service == "s3":
+            # A wildcard first is any bucket, in any account. arn:aws:s3:::bucket/* is just
+            # one bucket's objects.
+            if res[:1] in ("*", "?"):
+                return True
+            continue
+        if service in NAME_ONLY_SERVICES:
+            continue
+        # Every resource of one type, like user/*, function:*, or role* with no slash.
+        if re.fullmatch(r"[\w-]+[/:]\*", res) or re.fullmatch(r"[a-z][a-z-]*\*", res):
             return True
     return False
 
@@ -290,6 +348,81 @@ def condition_values(stmt, key: str) -> list:
                     if k.lower() == key.lower():
                         out += [str(x) for x in as_list(v)]
     return out
+
+
+def condition_entries(stmt) -> list:
+    """[(operator, key, values)] for every condition in a statement, as written."""
+    out = []
+    cond = stmt.get("Condition") or {}
+    if isinstance(cond, dict):
+        for op, block in cond.items():
+            if isinstance(block, dict):
+                for key, values in block.items():
+                    out.append((str(op), str(key), [str(v) for v in as_list(values)]))
+    return out
+
+
+def wide_value(base_op, value) -> bool:
+    """True when a condition value lets about anyone through: a bare wildcard, an ARN with a
+    wildcard for the partition, service or account, or a public IP range of /8 or wider
+    (/16 for IPv6), 0.0.0.0/0 and ::/0 included."""
+    v = str(value).strip()
+    if base_op == "ipaddress":
+        try:
+            net = ipaddress.ip_network(v, strict=False)
+        except ValueError:
+            return False
+        return net.prefixlen <= (8 if net.version == 4 else 16) and not net.is_private
+    if base_op not in WILDCARD_OPERATORS:
+        return False  # StringEquals takes * as a plain character
+    if not v.strip("*?"):
+        return True
+    parts = v.split(":", 5)
+    if parts[0] != "arn":
+        return False
+    if len(parts) < 6:
+        return has_wildcard(parts[-1])
+    _, partition, service, _region, account, res = parts
+    if has_wildcard(partition) or has_wildcard(service) or has_wildcard(account):
+        return True
+    if res and not res.strip("*?"):
+        return True
+    return service == "s3" and res[:1] in ("*", "?")  # any bucket, in any account
+
+
+def weak_condition(op, key, values) -> str:
+    """Why a condition doesn't narrow who gets in, or "" when it does."""
+    low = op.lower()
+    if low.startswith("forallvalues:") or low.endswith("ifexists"):
+        return f"{op} on {key} passes when the key is missing"
+    base = low.split(":", 1)[-1]  # drop ForAnyValue:
+    if "not" in base:
+        return f"{op} on {key} lets in everyone who doesn't match"
+    if base == "null":
+        return f"Null on {key} only checks whether the key is there"
+    if base not in POSITIVE_OPERATORS:
+        return f"{op} on {key} doesn't say who"
+    if not values:
+        return f"{op} on {key} has no value"
+    wide = [v for v in values if wide_value(base, v)]
+    if wide:
+        return f"{op} on {key} allows {', '.join(wide)}"
+    return ""
+
+
+def limiting_conditions(stmt) -> tuple:
+    """(keys that really narrow who gets in, reasons the other who-keys don't). Conditions
+    all have to match, so one narrowing condition is enough."""
+    strong, weak = set(), []
+    for op, key, values in condition_entries(stmt):
+        if key.lower() not in LIMITING_KEYS:
+            continue
+        why = weak_condition(op, key, values)
+        if why:
+            weak.append(why)
+        else:
+            strong.add(key.lower())
+    return sorted(strong), weak
 
 
 def principal_parts(principal) -> dict:
@@ -485,7 +618,7 @@ def principal_findings(stmt, where, kind, conds) -> list:
         return out
     parts = principal_parts(stmt.get("Principal"))
     actions = [str(a).lower() for a in as_list(stmt.get("Action"))]
-    limiting = sorted(k for k in conds if k in LIMITING_KEYS)
+    limiting, weak = limiting_conditions(stmt)
 
     if "*" in parts.get("AWS", []):
         who = "any AWS account in the world can assume this role" if kind == "trust" \
@@ -499,16 +632,21 @@ def principal_findings(stmt, where, kind, conds) -> list:
                                f"Principal is \"*\" but limited by {', '.join(limiting)}. Check "
                                "the values are yours.", where))
         else:
-            out.append(Finding("high", "Public principal with a weak condition",
-                               "Principal is \"*\" and the Condition doesn't use a key that "
-                               "limits who can call it (" + ", ".join(sorted(conds)) + ").", where,
-                               "Add aws:PrincipalOrgID, aws:SourceAccount or aws:SourceArn."))
+            if weak:
+                detail = ("Principal is \"*\" and the Condition doesn't limit who can call it: "
+                          + "; ".join(weak) + ".")
+            else:
+                detail = ("Principal is \"*\" and the Condition doesn't use a key that limits "
+                          "who can call it (" + ", ".join(sorted(conds)) + ").")
+            out.append(Finding("high", "Public principal with a weak condition", detail, where,
+                               "Add StringEquals on aws:PrincipalOrgID, aws:SourceAccount or "
+                               "aws:SourceArn (or ArnLike for ARNs) with your own values."))
 
     accounts = sorted({account_of(p) for p in parts.get("AWS", []) if account_of(p)})
     if accounts:
         msg = "Grants access to account " + ", ".join(accounts) + "."
         fix = ""
-        if kind == "trust" and "sts:externalid" not in conds and any(
+        if kind == "trust" and "sts:externalid" not in limiting and any(
                 re.search(r":root$", p) or re.fullmatch(r"\d{12}", p)
                 for p in parts.get("AWS", [])):
             msg += " Anyone in that account with sts:AssumeRole can assume this role."
@@ -517,23 +655,7 @@ def principal_findings(stmt, where, kind, conds) -> list:
 
     for fed in parts.get("Federated", []):
         if "token.actions.githubusercontent.com" in fed:
-            subs = condition_values(stmt, "token.actions.githubusercontent.com:sub")
-            if not subs:
-                out.append(Finding("critical", "GitHub OIDC trust without a repo check",
-                                   "Any GitHub Actions workflow in any repo can assume this role, "
-                                   "because there's no token.actions.githubusercontent.com:sub "
-                                   "condition.", where,
-                                   "Add StringLike token.actions.githubusercontent.com:sub = "
-                                   "repo:OWNER/REPO:ref:refs/heads/main (or :environment:NAME)."))
-            else:
-                loose = [s for s in subs if s in ("*", "repo:*") or re.fullmatch(r"repo:[^/]+/\*.*", s)
-                         or s.startswith("*")]
-                if loose:
-                    out.append(Finding("high" if any(s in ("*", "repo:*") or s.startswith("*")
-                                                     for s in loose) else "medium",
-                                       "GitHub OIDC repo check is loose",
-                                       "The sub condition allows " + ", ".join(loose) + ".",
-                                       where, "Pin it to one repo and branch or environment."))
+            out += github_sub_findings(stmt, where)
             if not condition_values(stmt, "token.actions.githubusercontent.com:aud"):
                 out.append(Finding("low", "GitHub OIDC trust without an audience check",
                                    "There's no token.actions.githubusercontent.com:aud condition.",
@@ -546,7 +668,7 @@ def principal_findings(stmt, where, kind, conds) -> list:
 
     services = parts.get("Service", [])
     if services and kind == "resource":
-        if not ({"aws:sourcearn", "aws:sourceaccount", "aws:sourceorgid"} & conds):
+        if not ({"aws:sourcearn", "aws:sourceaccount", "aws:sourceorgid"} & set(limiting)):
             out.append(Finding("low", "Service principal without a source check",
                                ", ".join(services) + " can use this for any customer's "
                                "resources (the confused deputy problem).", where,
@@ -557,6 +679,55 @@ def principal_findings(stmt, where, kind, conds) -> list:
                            "sts:AssumeRoleWithWebIdentity is allowed but no identity provider "
                            "is named.", where))
     return out
+
+
+def sub_looseness(base_op, value) -> int:
+    """2 when a GitHub sub pattern matches repos of any owner (repo:*, repo:*:*,
+    repo:*/app:*), 1 when it matches any repo of one owner (repo:my-org/*), else 0."""
+    if base_op != "stringlike":
+        return 0  # StringEquals takes * as a plain character
+    prefix = re.split(r"[*?]", value, maxsplit=1)[0]
+    if prefix == value:
+        return 0  # no wildcard
+    if "/" not in prefix:
+        return 2  # the wildcard comes before the owner is spelled out
+    if re.fullmatch(r"repo:[^/]+/", prefix):
+        return 1
+    return 0
+
+
+def github_sub_findings(stmt, where) -> list:
+    positive, negative = [], []
+    for op, key, values in condition_entries(stmt):
+        if key.lower() != GITHUB_SUB:
+            continue
+        # GitHub always sends sub, so ...IfExists and ForAllValues: work like the plain one.
+        base = op.lower().split(":", 1)[-1].removesuffix("ifexists")
+        if "not" in base:
+            negative.append(op)
+        elif base in ("stringequals", "stringequalsignorecase", "stringlike"):
+            positive.append((base, values))
+    if not positive:
+        if negative:
+            detail = (f"The only sub condition uses {', '.join(sorted(set(negative)))}, which "
+                      "lets in every repo except the ones listed, so any GitHub Actions "
+                      "workflow can assume this role.")
+        else:
+            detail = ("Any GitHub Actions workflow in any repo can assume this role, because "
+                      "there's no token.actions.githubusercontent.com:sub condition.")
+        return [Finding("critical", "GitHub OIDC trust without a repo check", detail, where,
+                        "Add StringLike token.actions.githubusercontent.com:sub = "
+                        "repo:OWNER/REPO:ref:refs/heads/main (or :environment:NAME).")]
+    # Every condition has to match, so the tightest one decides. A Not* condition next to
+    # a positive one only takes more away.
+    worst = min(max((sub_looseness(b, v) for v in values), default=0) for b, values in positive)
+    if not worst:
+        return []
+    loose = sorted({v for b, values in positive for v in values if sub_looseness(b, v) >= worst})
+    detail = "The sub condition allows " + ", ".join(loose)
+    detail += ", which matches repos owned by anyone." if worst == 2 else "."
+    return [Finding("high" if worst == 2 else "medium", "GitHub OIDC repo check is loose",
+                    detail, where, "Pin it to one repo and branch or environment.")]
 
 
 # ------------------------------------------------------------------ AWS checks
@@ -639,9 +810,16 @@ def fetch_policy(ctx, ref: str) -> tuple:
         pol = iam.get_policy(PolicyArn=ref)["Policy"]
         ver = iam.get_policy_version(PolicyArn=ref, VersionId=pol["DefaultVersionId"])
         return _decode(ver["PolicyVersion"]["Document"]), "identity", pol["PolicyName"]
-    m = re.match(r"(?:arn:aws[\w-]*:iam::\d{12}:)?role/(?:.*/)?([\w+=,.@-]+)$", ref)
+    m = re.match(r"(?:arn:aws[\w-]*:iam::(\d{12}):)?role/(?:.*/)?([\w+=,.@-]+)$", ref)
     if m:
-        role = iam.get_role(RoleName=m.group(1))["Role"]
+        # get_role only takes a name, so a role ARN from another account would quietly load
+        # the role with the same name in this one.
+        account = m.group(1)
+        if account and account != ctx.account:
+            raise PolicyError(f"That role is in account {account}, but this profile is signed "
+                              f"in to account {ctx.account}. Use a profile for {account}, or "
+                              "paste the trust policy instead.")
+        role = iam.get_role(RoleName=m.group(2))["Role"]
         return _decode(role["AssumeRolePolicyDocument"]), "trust", role["RoleName"] + " trust policy"
     raise PolicyError("Use a managed policy ARN, a role ARN, or role/NAME for a trust policy.")
 

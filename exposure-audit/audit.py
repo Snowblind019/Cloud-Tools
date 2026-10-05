@@ -1,11 +1,13 @@
 """Exposure Audit: looks for things open to the internet or missing basic protection.
 
-Read-only. Every check is a plain describe/list/get call.
+Read-only. The checks use describe, list and get calls, plus iam:GenerateCredentialReport,
+which only asks IAM to build the credential report so it can be read. Nothing is changed.
 """
 from __future__ import annotations
 
 import csv
 import io
+import ipaddress
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -47,6 +49,29 @@ def check(key, title, service, scope="region"):
 
 # =================================================================== network
 
+ONE_STEP_LOWER = {"critical": "high", "high": "medium", "medium": "low"}
+
+
+def wide_sources(perm) -> tuple:
+    """(open, broad) sources of one security group rule. open is the whole internet:
+    0.0.0.0/0, ::/0, or ranges that add up to it like 0.0.0.0/1 plus 128.0.0.0/1. broad is a
+    public range of /8 or wider in IPv4, or /16 or wider in IPv6, that doesn't."""
+    open_, broad = [], []
+    for key, field, widest in (("IpRanges", "CidrIp", 8), ("Ipv6Ranges", "CidrIpv6", 16)):
+        nets = []
+        for r in perm.get(key) or []:
+            try:
+                nets.append((r[field], ipaddress.ip_network(r[field], strict=False)))
+            except (KeyError, TypeError, ValueError):
+                continue
+        wide = [(text, net) for text, net in nets if net.prefixlen <= widest]
+        if any(n.prefixlen == 0 for n in ipaddress.collapse_addresses(n for _, n in nets)):
+            open_ += [text for text, _ in wide] or [text for text, _ in nets]
+        else:
+            broad += [text for text, net in wide if not net.is_private]
+    return open_, broad
+
+
 @check("open_sg", "Security groups open to the internet", "ec2")
 def check_security_groups(ctx, region):
     ec2 = ctx.client("ec2", region)
@@ -58,24 +83,26 @@ def check_security_groups(ctx, region):
     for sg in paginate(ec2, "describe_security_groups", "SecurityGroups"):
         gid = sg["GroupId"]
         for perm in sg.get("IpPermissions", []):
-            sources = [r.get("CidrIp") for r in perm.get("IpRanges", [])
-                       if r.get("CidrIp") == "0.0.0.0/0"]
-            sources += [r.get("CidrIpv6") for r in perm.get("Ipv6Ranges", [])
-                        if r.get("CidrIpv6") == "::/0"]
-            if not sources:
+            open_, broad = wide_sources(perm)
+            if not open_ and not broad:
                 continue
             sev, label = open_port_risk(perm.get("IpProtocol"), perm.get("FromPort"),
                                         perm.get("ToPort"))
+            title = "Open to the internet"
+            if not open_:  # a huge range, but not everyone
+                title = "Open to a very broad range"
+                sev = ONE_STEP_LOWER.get(sev, sev)
             in_use = gid in used
             if not in_use:  # nothing uses it yet, so one step lower
                 sev = {"critical": "medium", "high": "medium", "medium": "low"}.get(sev, sev)
-            detail = f"{label} from {', '.join(sources)}"
+            detail = f"{label} from {', '.join(open_ + broad)}"
+            if open_ and not {"0.0.0.0/0", "::/0"} & set(open_):
+                detail += " (together that's the whole internet)"
             detail += ", attached to something" if in_use else ", not attached to anything right now"
             fix = ("Normal for a public website." if sev == "info" else
                    "Limit the source to your IP, a VPN range, or another security group. Use "
                    "SSM Session Manager instead of open SSH or RDP.")
-            out.append(Finding(sev, "Open to the internet", gid, detail, fix,
-                               name=sg.get("GroupName", "")))
+            out.append(Finding(sev, title, gid, detail, fix, name=sg.get("GroupName", "")))
         if sg.get("GroupName") == "default" and (sg.get("IpPermissions") or []) and gid in used:
             out.append(Finding("low", "Default security group allows traffic", gid,
                                "Things that fall back to the default group get these rules.",
@@ -169,7 +196,12 @@ def check_s3(ctx, region):
             out.append(Finding("medium", "No account-level S3 public access block",
                                "account setting", "Each bucket decides for itself.",
                                "Turn on Block Public Access for the whole account in S3 settings."))
-        elif not is_access_denied(exc):
+        elif is_access_denied(exc):  # say so, rather than look like it's on
+            out.append(Finding("info", "Couldn't check the account's S3 public access block",
+                               "account setting", error_text(exc, ctx.profile) +
+                               ". The buckets were still checked one by one.",
+                               "Allow s3:GetAccountPublicAccessBlock to check it."))
+        else:
             raise
     s3 = ctx.client("s3", "us-east-1")
     for b in s3.list_buckets().get("Buckets", []):
@@ -241,6 +273,22 @@ def check_rds(ctx, region):
                 out.append(Finding("critical", "Public RDS snapshot", s["DBSnapshotIdentifier"],
                                    "Anyone can restore this database snapshot.",
                                    "Remove 'all' from the snapshot's restore permission."))
+    try:
+        for s in paginate(rds, "describe_db_cluster_snapshots", "DBClusterSnapshots",
+                          SnapshotType="manual"):
+            sid = s["DBClusterSnapshotIdentifier"]
+            attrs = rds.describe_db_cluster_snapshot_attributes(DBClusterSnapshotIdentifier=sid)
+            for a in attrs.get("DBClusterSnapshotAttributesResult", {}).get(
+                    "DBClusterSnapshotAttributes", []):
+                if a.get("AttributeName") == "restore" and "all" in (a.get("AttributeValues") or []):
+                    out.append(Finding("critical", "Public Aurora cluster snapshot", sid,
+                                       "Anyone can restore this cluster snapshot.",
+                                       "Remove 'all' from the snapshot's restore permission."))
+    except Exception as exc:  # noqa: BLE001
+        if not is_access_denied(exc):
+            raise
+        out.append(Finding("info", "Couldn't check Aurora cluster snapshots", "cluster snapshots",
+                           error_text(exc, ctx.profile)))
     return out
 
 
@@ -250,6 +298,7 @@ def check_rds(ctx, region):
 def check_lambda(ctx, region):
     lam = ctx.client("lambda", region)
     out = []
+    denied = {}  # what couldn't be read -> the first error, reported once below
     for fn in paginate(lam, "list_functions", "Functions"):
         name = fn["FunctionName"]
         try:
@@ -261,15 +310,25 @@ def check_lambda(ctx, region):
         except Exception as exc:  # noqa: BLE001
             if not is_access_denied(exc):
                 raise
+            denied.setdefault("function URLs", exc)
         try:
             pol = json.loads(lam.get_policy(FunctionName=name)["Policy"])
+            # Critical is Principal "*" with no condition. High covers a condition that
+            # doesn't narrow who (like StringNotEquals) and NotPrincipal.
             for f in iampolicy.analyze(pol, "resource"):
-                if f.severity == "critical":
-                    out.append(Finding("high", "Function policy allows anyone", name,
-                                       f.detail, "Set the principal to a service and add SourceArn."))
+                if f.severity in ("critical", "high"):
+                    title = "Function policy allows anyone" if f.severity == "critical" \
+                        else f"Function policy: {f.title}"
+                    out.append(Finding("high", title, name, f.detail,
+                                       "Set the principal to a service and add SourceArn."))
         except Exception as exc:  # noqa: BLE001
-            if error_code(exc) != "ResourceNotFoundException" and not is_access_denied(exc):
+            if error_code(exc) == "ResourceNotFoundException":
+                continue
+            if not is_access_denied(exc):
                 raise
+            denied.setdefault("function policies", exc)
+    for what, exc in denied.items():
+        out.append(Finding("info", f"Couldn't check {what}", "Lambda", error_text(exc, ctx.profile)))
     return out
 
 
@@ -419,6 +478,7 @@ def audit(profiles, regions=None, checks=None, progress=None, cancel=None, worke
     wanted = [CHECKS[c] for c in (checks or CHECKS) if c in CHECKS]
     findings, warnings = [], []
     denied = {}
+    unreachable = {}
     contexts = []
     for p in profiles:
         try:
@@ -455,11 +515,16 @@ def audit(profiles, regions=None, checks=None, progress=None, cancel=None, worke
             if progress:
                 progress(done, total, f"{c['title']} in {region}")
             if exc is not None:
-                if type(exc).__name__ in ("EndpointConnectionError",) or error_code(exc) in (
-                        "OptInRequired", "UnrecognizedClientException", "AuthFailure"):
-                    continue
+                if error_code(exc) == "OptInRequired":
+                    continue  # the region isn't turned on, so nothing can be in it
                 if is_access_denied(exc):
                     denied.setdefault((ctx.label, c["title"]), []).append(region)
+                elif type(exc).__name__ == "EndpointConnectionError" or error_code(exc) in (
+                        "UnrecognizedClientException", "AuthFailure"):
+                    # Not checked, so say so instead of looking clean. Grouped, since these
+                    # tend to hit every region at once.
+                    why = error_text(exc, ctx.profile)
+                    unreachable.setdefault((ctx.label, c["title"], why), []).append(region)
                 else:
                     warnings.append(f"{ctx.label}: {c['title']} in {region}: "
                                     f"{error_text(exc, ctx.profile)}")
@@ -474,6 +539,9 @@ def audit(profiles, regions=None, checks=None, progress=None, cancel=None, worke
     for (label, title), regs in sorted(denied.items()):
         where = regs[0] if len(regs) == 1 else f"{len(regs)} regions"
         warnings.append(f"{label}: no permission for {title} ({where})")
+    for (label, title, why), regs in sorted(unreachable.items()):
+        where = regs[0] if len(regs) == 1 else f"{len(regs)} regions"
+        warnings.append(f"{label}: couldn't check {title} ({where}): {why}")
     findings.sort(key=lambda f: (SEVERITY_ORDER.get(f.severity, 9), f.profile, f.region, f.check))
     return findings, warnings
 

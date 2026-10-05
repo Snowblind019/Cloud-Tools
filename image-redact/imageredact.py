@@ -10,6 +10,8 @@ for every option.
 from __future__ import annotations
 
 import argparse
+import atexit
+import errno
 import io
 import json
 import math
@@ -27,8 +29,9 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from . import redact
-from .common import (CONFIG_DIR, ClipboardError, is_wsl, notify, read_clipboard_image,
-                     windows_tool, write_clipboard_image)
+from .common import (CONFIG_DIR, UMASK, ClipboardError, is_wsl, notify, read_clipboard_image,
+                     write_clipboard_image)
+from .common import write_atomic as _write_atomic
 
 CONFIG_FILE = CONFIG_DIR / "image.json"
 WINDOWS = os.name == "nt"
@@ -37,6 +40,13 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 SAVE_TYPES = (".png", ".jpg", ".jpeg")
 OPEN_TYPES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff")
+# The only kinds of image it reads. Pillow and GdkPixbuf go by what's inside a file, not
+# its name, and some kinds they know, like PostScript, run other programs to read them.
+IMAGE_FORMATS = ("PNG", "JPEG", "WEBP", "BMP", "GIF", "TIFF")
+# The biggest image it opens. 100 megapixels already takes 400 MB once it's read, and text
+# detection makes more copies of that.
+MAX_PIXELS = 100_000_000
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 DEFAULT_CONFIG = {
     # Run text detection as soon as an image opens.
@@ -121,15 +131,38 @@ def _cairo():
     return cairo
 
 
+def check_size(w, h, name="The image"):
+    """Raise ImageError if an image is too big to open safely."""
+    if w * h > MAX_PIXELS:
+        raise ImageError(f"{name} is too big to open: {w}x{h} pixels. The most Image Redact "
+                         f"opens is {MAX_PIXELS // 1_000_000} megapixels.")
+
+
+def png_size(data: bytes):
+    """Width and height from a PNG's header, without reading the rest of it."""
+    if len(data) >= 24 and data[:8] == PNG_SIGNATURE and data[12:16] == b"IHDR":
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    return None
+
+
+def not_an_image(path) -> str:
+    return (f"{os.path.basename(path)} isn't a PNG, JPEG, WebP, BMP, GIF or TIFF image, so it "
+            "wasn't opened.")
+
+
 def load_image_bytes(path: str) -> bytes:
     """Read an image file and return it as PNG bytes, turned the right way up."""
     path = str(path)
+    name = os.path.basename(path)
     try:
         with open(path, "rb") as fh:
-            head = fh.read(8)
+            head = fh.read(24)
     except OSError as exc:
         raise ImageError(f"Couldn't open {path}: {exc.strerror or exc}") from exc
-    if head == b"\x89PNG\r\n\x1a\n":
+    if head[:8] == PNG_SIGNATURE:
+        size = png_size(head)
+        if size:
+            check_size(*size, name=name)
         with open(path, "rb") as fh:
             data = fh.read()
         surface_from_png(data)  # make sure cairo can read it
@@ -140,15 +173,21 @@ def load_image_bytes(path: str) -> bytes:
         Image = None
     if Image is not None:
         try:
-            with Image.open(path) as img:
+            with Image.open(path, formats=list(IMAGE_FORMATS)) as img:
+                check_size(*img.size, name=name)
                 img = ImageOps.exif_transpose(img)
                 if img.mode not in ("RGB", "RGBA"):
                     img = img.convert("RGBA")
                 buf = io.BytesIO()
                 img.save(buf, "PNG", compress_level=1)
             return buf.getvalue()
+        except Image.DecompressionBombError:
+            raise ImageError(f"{name} is too big to open. The most Image Redact opens is "
+                             f"{MAX_PIXELS // 1_000_000} megapixels.") from None
         except (OSError, ValueError) as exc:
-            raise ImageError(f"Couldn't read {os.path.basename(path)} as an image: {exc}") from exc
+            if isinstance(exc, Image.UnidentifiedImageError):
+                raise ImageError(not_an_image(path)) from exc
+            raise ImageError(f"Couldn't read {name} as an image: {exc}") from exc
     try:
         import gi
         gi.require_version("GdkPixbuf", "2.0")
@@ -156,19 +195,26 @@ def load_image_bytes(path: str) -> bytes:
     except (ImportError, ValueError) as exc:
         raise ImageError("Only PNG files can be opened without Pillow or GdkPixbuf.") from exc
     try:
+        info, w, h = GdkPixbuf.Pixbuf.get_file_info(path)
+        if info is None or info.get_name().upper() not in IMAGE_FORMATS:
+            raise ImageError(not_an_image(path))
+        if w > 0 and h > 0:
+            check_size(w, h, name=name)
         pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
         pixbuf = pixbuf.apply_embedded_orientation() or pixbuf
         ok, data = pixbuf.save_to_bufferv("png", ["compression"], ["1"])
     except GLib.Error as exc:
-        raise ImageError(f"Couldn't read {os.path.basename(path)} as an image: "
-                         f"{exc.message}") from exc
+        raise ImageError(f"Couldn't read {name} as an image: {exc.message}") from exc
     if not ok:
-        raise ImageError(f"Couldn't read {os.path.basename(path)} as an image.")
+        raise ImageError(f"Couldn't read {name} as an image.")
     return bytes(data)
 
 
 def surface_from_png(data: bytes):
     cairo = _cairo()
+    size = png_size(data)
+    if size:
+        check_size(*size)
     try:
         return cairo.ImageSurface.create_from_png(io.BytesIO(data))
     except (cairo.Error, MemoryError) as exc:
@@ -181,6 +227,17 @@ class OcrError(Exception):
     pass
 
 
+class PartialOcrError(OcrError):
+    """Some of the text was read, but one of the passes failed, so part of the image (light
+    text on dark, for example) wasn't checked. passes has the words from the passes that
+    worked, and detect() adds the boxes they give as boxes."""
+
+    def __init__(self, cause, passes):
+        first = (str(cause).strip().splitlines() or ["unknown error"])[0].rstrip(".")
+        super().__init__(f"Only part of the text check ran: {first}.")
+        self.cause, self.passes, self.boxes = cause, passes, None
+
+
 if WINDOWS:
     INSTALL_HINT = ("Text detection needs Windows PowerShell, which comes with Windows 10 and 11, "
                     "or Tesseract.")
@@ -191,23 +248,51 @@ else:
                     "Arch:          sudo pacman -S tesseract tesseract-data-eng")
 
 
-def tesseract_path():
-    found = shutil.which("tesseract")
-    if found or not WINDOWS:
-        return found
-    # The Windows installers don't add tesseract to PATH by default.
-    for base in (os.environ.get("LOCALAPPDATA", ""), os.environ.get("ProgramFiles", ""),
-                 os.environ.get("ProgramFiles(x86)", "")):
-        for sub in (r"Programs\Tesseract-OCR", "Tesseract-OCR"):
-            exe = os.path.join(base, sub, "tesseract.exe")
-            if base and os.path.isfile(exe):
+def _exe_on_path(name):
+    """The file called name in one of the PATH folders. Only full folder paths count, so an
+    empty or relative entry can't pick up a program from the folder the app started in."""
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        folder = folder.strip().strip('"')
+        if folder and os.path.isabs(folder):
+            exe = os.path.join(folder, name)
+            if os.path.isfile(exe):
                 return exe
     return None
 
 
+def tesseract_path():
+    if not WINDOWS:
+        return shutil.which("tesseract")
+    # On Windows, shutil.which looks in the current folder first, and takes tesseract.bat
+    # or .cmd too, which run through cmd.exe. So only tesseract.exe counts, found on PATH
+    # or where the installers put it, since they don't add it to PATH by default.
+    found = _exe_on_path("tesseract.exe")
+    if found:
+        return found
+    for base in (os.environ.get("LOCALAPPDATA", ""), os.environ.get("ProgramFiles", ""),
+                 os.environ.get("ProgramFiles(x86)", "")):
+        for sub in (r"Programs\Tesseract-OCR", "Tesseract-OCR"):
+            exe = os.path.join(base, sub, "tesseract.exe")
+            if base and os.path.isabs(base) and os.path.isfile(exe):
+                return exe
+    return None
+
+
+def powershell_path():
+    """Windows PowerShell from the Windows folder, never a powershell.exe that happens to
+    be in the current folder or earlier on PATH."""
+    if not WINDOWS:
+        return None
+    root = os.environ.get("SystemRoot") or os.environ.get("windir") or ""
+    if not os.path.isabs(root):
+        root = r"C:\Windows"
+    exe = os.path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    return exe if os.path.isfile(exe) else None
+
+
 def windows_ocr_available() -> bool:
     """Windows 10 and 11 have OCR built in, reached here through Windows PowerShell."""
-    return WINDOWS and windows_tool("powershell.exe") is not None
+    return WINDOWS and powershell_path() is not None
 
 
 def ocr_engine():
@@ -305,7 +390,8 @@ def ocr_scale(surface) -> float:
     return 1.0
 
 
-def _prepare(surface, scale: float, invert: bool, path: str):
+def _prepare(surface, scale: float, invert: bool) -> bytes:
+    """The image the way OCR reads it best, as PNG bytes."""
     cairo = _cairo()
     w, h = surface.get_width(), surface.get_height()
     out = cairo.ImageSurface(cairo.FORMAT_RGB24, max(int(w * scale), 1), max(int(h * scale), 1))
@@ -321,7 +407,9 @@ def _prepare(surface, scale: float, invert: bool, path: str):
         cr.set_operator(cairo.OPERATOR_DIFFERENCE)
         cr.set_source_rgb(1, 1, 1)
         cr.paint()
-    out.write_to_png(path)
+    buf = io.BytesIO()
+    out.write_to_png(buf)
+    return buf.getvalue()
 
 
 class _HocrParser(HTMLParser):
@@ -405,18 +493,99 @@ def parse_hocr(text: str, scale: float, tag) -> list:
     return parser.words
 
 
-def _run_pass(exe, surface, scale, invert, language, folder, results, index):
-    path = os.path.join(folder, f"pass{index}.png")
+# Text detection runs in threads that Python stops without cleaning up when the app
+# closes. So whatever they started is tracked here and dealt with at exit instead: the
+# OCR programs still running get stopped, and the folders holding the copy of the image
+# Windows OCR reads get removed.
+_cleanup_lock = threading.Lock()
+_running = set()
+_temp_folders = set()
+_exiting = False
+
+
+def _cleanup_at_exit():
+    global _exiting
+    with _cleanup_lock:
+        _exiting = True
+        procs, folders = list(_running), list(_temp_folders)
+    for proc in procs:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    for proc in procs:
+        try:
+            proc.wait(timeout=5)  # Windows won't delete a file a program still has open
+        except (OSError, subprocess.SubprocessError):
+            pass
+    for folder in folders:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+atexit.register(_cleanup_at_exit)
+
+
+def _make_temp_folder() -> str:
+    # mkdtemp folders are private to you, and get removed with whatever was in them.
+    with _cleanup_lock:
+        if _exiting:
+            raise OcrError("The app is closing.")
+        folder = tempfile.mkdtemp(prefix="awskit-ocr-")
+        _temp_folders.add(folder)
+    return folder
+
+
+def _remove_temp_folder(folder):
+    shutil.rmtree(folder, ignore_errors=True)
+    with _cleanup_lock:
+        _temp_folders.discard(folder)
+
+
+def _run_tool(cmd, data=None, env=None, timeout=180):
+    """Like subprocess.run with capture_output, but it keeps track of the program so it
+    gets stopped if the app closes first. data goes to its stdin."""
+    with _cleanup_lock:
+        if _exiting:
+            raise OcrError("The app is closing.")
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE if data is not None else None,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                creationflags=NO_WINDOW, env=env)
+        _running.add(proc)
     try:
-        _prepare(surface, scale, invert, path)
-        r = subprocess.run([exe, path, "stdout", "-l", language, "--psm", "3",
-                            "--dpi", str(int(96 * scale)), "-c", "hocr_char_boxes=1", "hocr"],
-                           capture_output=True, timeout=180, creationflags=NO_WINDOW)
+        try:
+            out, err = proc.communicate(data, timeout=timeout)
+        except BaseException:
+            proc.kill()
+            proc.communicate()
+            raise
+    finally:
+        with _cleanup_lock:
+            _running.discard(proc)
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+def _run_pass(exe, surface, scale, invert, language, results, index, folder=None):
+    try:
+        image = _prepare(surface, scale, invert)
+        source, data = "stdin", image
+        if folder:
+            # Windows builds of tesseract don't all read images from stdin reliably, so
+            # there it reads a file in a private folder that's removed afterwards.
+            source, data = os.path.join(folder, f"pass{index}.png"), None
+            with open(source, "wb") as fh:
+                fh.write(image)
+        # Elsewhere the image goes through stdin, so no copy of it is written to disk.
+        r = _run_tool([exe, source, "stdout", "-l", language, "--psm", "3",
+                       "--dpi", str(int(96 * scale)), "-c", "hocr_char_boxes=1", "hocr"],
+                      data=data)
     except subprocess.TimeoutExpired:
         results[index] = OcrError("Text detection took too long and was stopped.")
         return
     except OSError as exc:
         results[index] = OcrError(f"Couldn't run tesseract: {exc}")
+        return
+    except OcrError as exc:
+        results[index] = exc
         return
     err = r.stderr.decode("utf-8", "replace")
     if r.returncode != 0:
@@ -512,19 +681,25 @@ def powershell_error(text: str) -> str:
 def _run_windows_pass(surface, scale, invert, folder, results, index):
     import base64
     path = os.path.join(folder, f"pass{index}.png")
-    ps = windows_tool("powershell.exe") or "powershell.exe"
+    ps = powershell_path()
+    if not ps:
+        results[index] = OcrError(INSTALL_HINT)
+        return
     encoded = base64.b64encode(WINDOWS_OCR_SCRIPT.encode("utf-16-le")).decode("ascii")
     try:
-        _prepare(surface, scale, invert, path)
-        r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                            "-EncodedCommand", encoded],
-                           capture_output=True, timeout=180, creationflags=NO_WINDOW,
-                           env=dict(os.environ, AWSKIT_OCR_IMAGE=os.path.abspath(path)))
+        with open(path, "wb") as fh:
+            fh.write(_prepare(surface, scale, invert))
+        r = _run_tool([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                       "-EncodedCommand", encoded],
+                      env=dict(os.environ, AWSKIT_OCR_IMAGE=os.path.abspath(path)))
     except subprocess.TimeoutExpired:
         results[index] = OcrError("Text detection took too long and was stopped.")
         return
     except OSError as exc:
         results[index] = OcrError(f"Couldn't run PowerShell for Windows OCR: {exc}")
+        return
+    except OcrError as exc:
+        results[index] = exc
         return
     err = r.stderr.decode("utf-8", "replace").strip()
     if r.returncode != 0:
@@ -541,7 +716,8 @@ def _run_windows_pass(surface, scale, invert, folder, results, index):
 
 
 def read_text(png: bytes, language: str = "eng") -> list:
-    """Run OCR on an image. Returns one list of words per pass, in image pixels."""
+    """Run OCR on an image. Returns one list of words per pass, in image pixels. Raises
+    OcrError if nothing could be read, and PartialOcrError if only some passes worked."""
     exe = tesseract_path()
     engine = "tesseract" if exe else ("windows" if windows_ocr_available() else None)
     if engine is None:
@@ -553,8 +729,8 @@ def read_text(png: bytes, language: str = "eng") -> list:
         scale = min(scale, WINDOWS_OCR_MAX / max(biggest, 1))
     plan = ocr_plan(surface)
     results = [None] * len(plan)
-    # mkdtemp folders are private to you, and get removed with whatever was in them.
-    folder = tempfile.mkdtemp(prefix="awskit-ocr-")
+    # Windows OCR reads the image from a file. Tesseract gets it through stdin.
+    folder = _make_temp_folder() if engine == "windows" or WINDOWS else None
     try:
         if engine == "windows":
             threads = [threading.Thread(target=_run_windows_pass, daemon=True,
@@ -562,19 +738,24 @@ def read_text(png: bytes, language: str = "eng") -> list:
                        for i, inv in enumerate(plan)]
         else:
             threads = [threading.Thread(target=_run_pass, daemon=True,
-                                        args=(exe, surface, scale, inv, language, folder,
-                                              results, i))
+                                        args=(exe, surface, scale, inv, language, results, i,
+                                              folder))
                        for i, inv in enumerate(plan)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
     finally:
-        shutil.rmtree(folder, ignore_errors=True)
+        if folder:
+            _remove_temp_folder(folder)
     passes = [r for r in results if isinstance(r, list)]
-    errors = [r for r in results if isinstance(r, Exception)]
+    # A pass that left nothing behind crashed, which counts as failing too.
+    errors = [r if isinstance(r, Exception) else OcrError("Text detection stopped partway.")
+              for r in results if not isinstance(r, list)]
     if errors and not passes:
         raise errors[0]
+    if errors:
+        raise PartialOcrError(errors[0], passes)
     return passes
 
 
@@ -1002,8 +1183,12 @@ def draw_shape(cr, shape, see_through=False):
     kind = shape["kind"]
     width = max(float(shape.get("width", 4)), 0.5)
     filled = is_cover(shape)
-    if filled and see_through:
-        a *= 0.35
+    if filled:
+        # Solid boxes are always fully solid, whatever the settings file says, so nothing
+        # shows through in a saved or copied image. See through is only for the screen.
+        a = 1.0
+        if see_through:
+            a *= 0.35
     cr.set_source_rgba(r, g, b, a)
     cr.set_line_width(width)
     cr.set_line_cap(cairo.LINE_CAP_ROUND)
@@ -1012,9 +1197,12 @@ def draw_shape(cr, shape, see_through=False):
         x1, y1, x2, y2 = rect_of(shape)
         radius = float(shape.get("radius", 0) or 0)
         if filled and radius > 0:
-            # Grow the box a little so its rounded corners still cover the corners of the
-            # original rectangle. Rounding never uncovers anything.
-            grow = min(radius, (x2 - x1) / 2, (y2 - y1) / 2) * 0.293
+            # Grow the box so its rounded corners still cover the corners of the original
+            # rectangle. A corner of radius r sits r * (1 - 1/sqrt(2)) inside the box at
+            # its tightest, so growing by that much (rounded up to a whole pixel) and
+            # drawing with that same r means rounding never uncovers anything.
+            radius = min(radius, (x2 - x1) / 2, (y2 - y1) / 2)
+            grow = math.ceil(radius * (1 - math.sqrt(0.5)))
             x1, y1, x2, y2 = x1 - grow, y1 - grow, x2 + grow, y2 + grow
         rounded_rect(cr, x1, y1, x2 - x1, y2 - y1, radius)
         if filled:
@@ -1122,7 +1310,7 @@ def encode(png: bytes, shapes, ext: str = ".png") -> bytes:
             Image = None
         if Image is not None:
             out = io.BytesIO()
-            with Image.open(io.BytesIO(buf.getvalue())) as img:
+            with Image.open(io.BytesIO(buf.getvalue()), formats=["PNG"]) as img:
                 img.convert("RGB").save(out, "JPEG", quality=92)
             return out.getvalue()
         import gi
@@ -1194,8 +1382,13 @@ def default_name(source_path=None, now=None) -> str:
 
 def clean_name(text: str, current_ext: str = ".png") -> str:
     """A safe file name from what was typed. Keeps .png, .jpg or .jpeg, and adds the
-    current type when there's no extension (or one that can't be saved)."""
-    name = text.strip().replace("/", "-").replace("\\", "-").replace("\0", "").strip()
+    current type when there's no extension (or one that can't be saved).
+
+    Characters Windows doesn't allow in names become dashes. Slashes would save into
+    another folder, and on Windows a colon would too (D:x.png) or hide the image in a
+    stream inside another file (a.png:b)."""
+    name = re.sub(r"[\x00-\x1f\x7f]", "", text.strip())
+    name = re.sub(r'[<>:"/\\|?*]', "-", name).strip()
     if not name.strip("."):
         raise ValueError("Give the file a name.")
     if os.path.splitext(name)[1].lower() in SAVE_TYPES:
@@ -1214,26 +1407,9 @@ def short_path(path: str) -> str:
 
 
 def write_atomic(path: str, data: bytes):
-    folder = os.path.dirname(os.path.abspath(path))
-    os.makedirs(folder, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".awskit-", suffix=".tmp", dir=folder)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        os.chmod(tmp, 0o644 & ~_umask())
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def _umask() -> int:
-    mask = os.umask(0)
-    os.umask(mask)
-    return mask
+    """Write a file so nobody sees half of it, making its folder first if needed."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    _write_atomic(path, data, mode=0o644 & ~UMASK)
 
 
 def relocate(src: str, dest: str) -> str:
@@ -1248,15 +1424,19 @@ def relocate(src: str, dest: str) -> str:
         write_atomic(dest, data)
         os.unlink(src)
         return dest
-    if os.path.exists(dest):
-        if os.path.isdir(dest):
-            raise OSError(f"{dest} is a folder")
-        try:
-            os.replace(src, dest)
-            return dest
-        except OSError:
-            os.unlink(dest)  # different drive, so shutil.move below copies it over
-    shutil.move(src, dest)
+    if os.path.isdir(dest):
+        raise OSError(f"{dest} is a folder")
+    try:
+        os.replace(src, dest)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise  # whatever is at dest stays as it was
+        # A different drive, so copy it over (replacing dest in one step), then remove
+        # the original.
+        with open(src, "rb") as fh:
+            data = fh.read()
+        write_atomic(dest, data)
+        os.unlink(src)
     return dest
 
 
@@ -1275,12 +1455,18 @@ def windows_to_linux(path: str) -> str:
 
 
 def detect(png: bytes, cfg=None):
-    """Find what to cover. Returns (boxes, size)."""
+    """Find what to cover. Returns (boxes, size). If only part of the text check ran,
+    raises PartialOcrError with the boxes from the part that did in its boxes."""
     cfg = cfg or load_config()
     surface = surface_from_png(png)
     size = (surface.get_width(), surface.get_height())
-    passes = read_text(png, cfg["language"])
-    return find_boxes(passes, redaction_options(), size), size
+    opts = redaction_options()
+    try:
+        passes = read_text(png, cfg["language"])
+    except PartialOcrError as exc:
+        exc.boxes = find_boxes(exc.passes, opts, size)
+        raise
+    return find_boxes(passes, opts, size), size
 
 
 def tell(message, title="Image Redact"):
@@ -1346,11 +1532,44 @@ def cmd_check() -> int:
     return 0 if ok else 1
 
 
+def output_path(source: str, output: str, force=False) -> str:
+    """Where -o saves. A folder gets the usual -redacted name, and a name without an
+    extension gets the source's type. Raises ImageError for a type it can't save, and for
+    the source image itself unless force is set."""
+    out = os.path.expanduser(output)
+    if out.endswith(("/", os.sep)) or os.path.isdir(out):
+        out = os.path.join(out, default_name(source))
+    elif not os.path.splitext(out)[1]:
+        out += file_type(source)
+    ext = os.path.splitext(out)[1].lower()
+    if ext not in SAVE_TYPES:
+        raise ImageError(f"can't save {ext} files. Give OUT a .png or .jpg name.")
+    try:
+        same = os.path.exists(out) and os.path.samefile(source, out)
+    except OSError:
+        same = False
+    if same and not force:
+        raise ImageError(f"{out} is the image you're redacting, and saving would replace it. "
+                         "Pick another name, or add --force to replace it anyway.")
+    return out
+
+
+def _detect_partial(png):
+    """detect(), but when only part of the text check ran, it returns what that part found
+    plus the warning to show, instead of raising."""
+    try:
+        boxes, _ = detect(png)
+        return boxes, ""
+    except PartialOcrError as exc:
+        return exc.boxes, str(exc)
+
+
 def cmd_file(path, args) -> int:
     path = windows_to_linux(path)
     try:
         png = load_image_bytes(path)
-        boxes, _ = detect(png)
+        out = None if args.list else output_path(path, args.output, args.force)
+        boxes, warning = _detect_partial(png)
     except (ImageError, OcrError) as exc:
         print(f"awskit image: {exc}", file=sys.stderr)
         return 1
@@ -1362,12 +1581,10 @@ def cmd_file(path, args) -> int:
             for b in boxes:
                 print(f"{label_name(b[4]):<20} x {b[0]:.0f}-{b[2]:.0f}  y {b[1]:.0f}-{b[3]:.0f}")
             print(summary([b[4] for b in boxes]), file=sys.stderr)
+        if warning:
+            print(f"awskit image: warning: {warning}", file=sys.stderr)
+            return 1
         return 0
-    out = os.path.expanduser(args.output)
-    if out.endswith(("/", os.sep)) or os.path.isdir(out):
-        out = os.path.join(out, default_name(path))
-    elif not os.path.splitext(out)[1]:
-        out += file_type(path)
     color = load_config()["box_color"]
     shapes = [cover_shape(b, color, auto=True) for b in boxes]
     try:
@@ -1376,6 +1593,12 @@ def cmd_file(path, args) -> int:
         print(f"awskit image: couldn't save {out}: {exc}", file=sys.stderr)
         return 1
     print(f"{summary([b[4] for b in boxes])}. Saved {out}", file=sys.stderr)
+    if warning:
+        # Saved anyway, since it's still better than nothing, but the exit code says it
+        # isn't finished, so a script doesn't go on to share it.
+        print(f"awskit image: warning: {warning} Some text may not be covered.",
+              file=sys.stderr)
+        return 1
     print("Text detection can miss things, so look it over before sharing.", file=sys.stderr)
     return 0
 
@@ -1392,12 +1615,16 @@ def cmd_clip(args) -> int:
         tell("The clipboard doesn't have an image in it.")
         return 1
     try:
-        boxes, _ = detect(png)
+        boxes, warning = _detect_partial(png)
         color = load_config()["box_color"]
         out = encode(png, [cover_shape(b, color, auto=True) for b in boxes])
         write_clipboard_image(out)
     except (ImageError, OcrError, ClipboardError) as exc:
         tell(str(exc))
+        return 1
+    if warning:
+        tell(f"{warning} {summary([b[4] for b in boxes])}. Some text may not be covered, so "
+             "look it over carefully before pasting.", title="Clipboard image partly redacted")
         return 1
     tell(summary([b[4] for b in boxes]) + ". Ready to paste, but look it over first.",
          title="Clipboard image redacted")
@@ -1436,7 +1663,9 @@ def build_parser(prog="awskit image"):
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("target", nargs="?", help=argparse.SUPPRESS)
     p.add_argument("-o", "--output", metavar="OUT",
-                   help="save the covered image here, a file or a folder")
+                   help="save the covered image here, a .png or .jpg file, or a folder")
+    p.add_argument("--force", action="store_true",
+                   help="with -o, let OUT be the input image, replacing the original")
     p.add_argument("-l", "--list", action="store_true", help="print what it would cover")
     p.add_argument("--json", action="store_true", help="with --list, print JSON")
     p.add_argument("-g", "--gui", action="store_true", help="open in the window")

@@ -307,7 +307,7 @@ Use these names with `--skip` and `--only`.
 | Name | Default | What it covers |
 |---|---|---|
 | `account_ids` | on | 12-digit account numbers, including the ones inside ARNs and ECR URLs |
-| `aws_keys` | on | AKIA and ASIA access keys, secret access keys and session tokens |
+| `aws_keys` | on | AKIA and ASIA access keys, secret access keys and session tokens, including the token, key and signature in presigned URLs |
 | `iam_ids` | on | AIDA, AROA and similar IDs from get-caller-identity and IAM output |
 | `iam_names` | on | The user name in IAM user ARNs and the session name in assumed-role ARNs |
 | `sso_hash` | on | The random ending on AWSReservedSSO_ role names |
@@ -317,11 +317,11 @@ Use these names with `--skip` and `--only`.
 | `aws_hostnames` | on | The unique part of API Gateway, Lambda URL, CloudFront, RDS, ELB and access portal hostnames, plus Route 53 zone and CloudFront distribution IDs |
 | `buckets` | on | Bucket names in s3:// URLs, S3 ARNs, S3 hostnames and bucket settings |
 | `canonical_ids` | on | The 64-character owner IDs in S3 output |
-| `private_keys` | on | PEM and OpenSSH private key blocks |
+| `private_keys` | on | PEM and OpenSSH private key blocks, even cut off before the END line, and PuTTY .ppk private lines |
 | `ssh_keys` | on | The key and comment after ssh-ed25519, ssh-rsa and similar |
 | `tokens` | on | GitHub, GitLab, Slack, Terraform Cloud, OpenAI, Anthropic, Google and Stripe tokens, JWTs, and long random strings |
 | `url_creds` | on | The user:password part of URLs like https://user:pass@host |
-| `secret_values` | on | Values of password, secret, token, api_key and similar settings |
+| `secret_values` | on | Values of password, secret, token, api_key and similar settings (names that end in them too, like `DATABASE_PASSWORD` or `MasterUserPassword`), secrets inside a value like Secrets Manager's `SecretString`, `--password` and `-p` flags, and `Authorization:` headers |
 | `emails` | on | Email addresses |
 | `phones` | on | US formats and +country numbers |
 | `names` | on | Values of owner, user, username, display_name, first_name, organization and similar settings |

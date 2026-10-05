@@ -35,6 +35,10 @@ TOOLS = [
 SHORTCUTS_HELP = ("V C R O L A P T pick tools. Ctrl+S saves, Ctrl+C copies, F2 renames, Ctrl+M "
                   "moves. Ctrl+scroll zooms, middle-drag pans.")
 
+# Shown when Save or Copy is tried while text detection is still running.
+BUSY = ("Text detection is still running. Save and Copy work again once it's done, so "
+        "nothing goes out before it's covered.")
+
 
 @dataclass
 class Outcome:
@@ -72,7 +76,9 @@ class Editor:
         self.undo_stack, self.redo_stack = [], []
         self.selected = None
         self.passes = None         # OCR results, kept so settings changes don't re-read
+        self.ocr_warning = ""      # set when only part of the text check ran
         self.generation = 0
+        self._finding = None       # the generation text detection is running for
         self.saved_path = None
         self.name = ""
         self.folder = ir.pictures_folder()
@@ -93,6 +99,7 @@ class Editor:
         self.png, self.surface, self.source_path = png, surface, path
         self.shapes, self.undo_stack, self.redo_stack = [], [], []
         self.selected, self.passes, self.saved_path, self.unsaved = None, None, None, False
+        self.ocr_warning, self._finding = "", None
         self.drag = self.draft = None
         self.name = ir.default_name(path)
         if path:
@@ -141,6 +148,38 @@ class Editor:
         return True
 
     # ================================================================== detection
+    @property
+    def finding(self) -> bool:
+        """True while text detection runs for the image that's open. Save and Copy wait
+        for it, so the image never goes out before the boxes are on it."""
+        return self._finding is not None and self._finding == self.generation
+
+    def start_finding(self) -> int:
+        """Text detection is starting. Returns the generation to hand to found() or
+        find_failed() when it's done."""
+        self._finding = self.generation
+        return self.generation
+
+    def found(self, gen, passes, warning=""):
+        """Text detection finished. Returns the status message, or None when another
+        image was opened since it started."""
+        if gen != self.generation:
+            return None
+        self._finding = None
+        self.passes, self.ocr_warning = passes, warning
+        return self.apply_passes()
+
+    def find_failed(self, gen, exc):
+        """Text detection failed. If only part of it did, the boxes from the part that
+        worked still go on, with a warning. Returns the status message, or None when
+        another image was opened since it started."""
+        if gen != self.generation:
+            return None
+        if isinstance(exc, ir.PartialOcrError):
+            return self.found(gen, exc.passes, str(exc))
+        self._finding = None
+        return (str(exc).strip().splitlines() or ["Text detection failed."])[0]
+
     def apply_passes(self) -> str:
         """Turn the OCR results into boxes with the current PII Redact settings. Replaces
         the boxes detection drew before, but not ones you changed or drew yourself."""
@@ -155,6 +194,10 @@ class Editor:
             if self.selected is not None and self.selected.get("auto"):
                 self.selected = None
         msg = ir.summary([b[4] for b in boxes])
+        if self.ocr_warning:
+            # Find PII reads the text again in this case, so say so.
+            return (f"{self.ocr_warning} {msg}. Some text may not be covered, so check it "
+                    "carefully, or click Find PII to try again.")
         if boxes:
             return msg + ". Check it over and cover anything it missed."
         return msg + ". Check it over and cover anything that shouldn't be shared."
@@ -503,6 +546,8 @@ class Editor:
         return Outcome("done", dest=path)
 
     def write(self, path) -> Outcome:
+        if self.finding:
+            return Outcome("error", BUSY)
         try:
             ir.write_atomic(path, ir.encode(self.png, self.shapes, ir.file_type(path)))
         except (OSError, ir.ImageError) as exc:
@@ -513,9 +558,14 @@ class Editor:
         return Outcome("done", f"Saved to {ir.short_path(path)}", path)
 
     def copy_png(self) -> bytes:
-        png = ir.encode(self.png, self.shapes, ".png")
+        """The finished image to put on the clipboard. Call copied() once it's there."""
+        if self.finding:
+            raise ir.ImageError(BUSY)
+        return ir.encode(self.png, self.shapes, ".png")
+
+    def copied(self):
+        """The image made it onto the clipboard, so closing doesn't need to ask."""
         self.unsaved = False
-        return png
 
 
 def constrain(kind, sx, sy, x, y):

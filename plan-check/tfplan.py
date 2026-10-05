@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
 import tempfile
 from dataclasses import asdict, dataclass, field
@@ -69,24 +71,83 @@ class PlanError(Exception):
     pass
 
 
+class NeedsTerraform(PlanError):
+    """Reading this means running Terraform, and the caller said not to."""
+
+
 # ------------------------------------------------------------------ loading
 
+TF_NAMES = ("terraform", "tofu")
+
+
 def terraform_bin():
-    for name in ("terraform", "tofu"):
+    """The terraform (or tofu) program to run, or None if neither is installed.
+
+    On Windows, shutil.which looks in the current folder first and also takes .bat and .cmd
+    files. Those run through cmd.exe, which reads the arguments again, so a path with & in
+    it could run something else. So there it only takes terraform.exe or tofu.exe from a
+    folder in PATH."""
+    if os.name == "nt":
+        folders = [d.strip().strip('"') for d in os.environ.get("PATH", "").split(os.pathsep)]
+        for name in TF_NAMES:
+            for folder in folders:
+                if not folder or not os.path.isabs(folder):
+                    continue
+                path = os.path.join(folder, name + ".exe")
+                if os.path.isfile(path):
+                    return path
+        return None
+    for name in TF_NAMES:
         path = shutil.which(name)
         if path:
             return path
     return None
 
 
-def _run(cmd, cwd, timeout=900):
+def _env(profile=None) -> dict:
+    """The environment Terraform runs with. With a profile (the one picked in AWS Kit), the
+    AWS provider uses it instead of whatever profile the app was started with."""
+    env = {**os.environ, "TF_IN_AUTOMATION": "1"}
+    if profile:
+        env["AWS_PROFILE"] = profile
+        env.pop("AWS_DEFAULT_PROFILE", None)
+    return env
+
+
+def _run(cmd, cwd, timeout=900, profile=None):
+    """Run cmd and return a CompletedProcess. On Linux and macOS it runs in its own process
+    group, so if it times out the provider plugins Terraform started are stopped with it."""
+    group = os.name != "nt"
     try:
-        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout,
-                              env={**os.environ, "TF_IN_AUTOMATION": "1"})
-    except subprocess.TimeoutExpired as exc:
-        raise PlanError(f"{Path(cmd[0]).name} timed out.") from exc
+        proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, env=_env(profile),
+                                start_new_session=group)
     except OSError as exc:
         raise PlanError(str(exc)) from exc
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _stop(proc, group)
+        raise PlanError(f"{Path(cmd[0]).name} timed out.") from exc
+    except BaseException:
+        _stop(proc, group)
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+def _stop(proc, group):
+    if not group:  # Windows: the same as subprocess.run does
+        proc.kill()
+        proc.communicate()
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    proc.wait()
+    for pipe in (proc.stdout, proc.stderr):
+        if pipe:
+            pipe.close()
 
 
 def _tail(text, lines=25):
@@ -94,61 +155,93 @@ def _tail(text, lines=25):
     return "\n".join(rows[-lines:])
 
 
-def show_json(plan_file: str) -> dict:
+def show_json(plan_file: str, profile=None, cwd=None) -> dict:
+    """terraform show -json on a saved plan. It runs in cwd (the plan's folder unless
+    given), which needs the .terraform folder the plan was made with."""
     tf = terraform_bin()
     if not tf:
         raise PlanError("Terraform isn't installed or isn't in PATH.")
     path = Path(plan_file).resolve()
-    r = _run([tf, "show", "-json", "-no-color", str(path)], cwd=str(path.parent))
+    r = _run([tf, "show", "-json", "-no-color", str(path)], cwd=str(cwd or path.parent),
+             profile=profile)
     if r.returncode != 0:
         raise PlanError("terraform show failed:\n" + _tail(r.stderr or r.stdout))
-    return json.loads(r.stdout)
+    try:
+        return json.loads(r.stdout)
+    except ValueError as exc:
+        raise PlanError(f"terraform show didn't print JSON: {exc}") from exc
 
 
-def plan_directory(directory: str, extra_args=None, log=None) -> dict:
+def show_state(directory: str, profile=None) -> dict:
+    """terraform show -json in a folder: its current state, without planning anything.
+    Cloud Map uses this to draw what a folder has already built."""
+    tf = terraform_bin()
+    if not tf:
+        raise PlanError("Terraform isn't installed or isn't in PATH.")
+    directory = str(Path(directory).resolve())
+    r = _run([tf, "show", "-json", "-no-color"], cwd=directory, profile=profile)
+    if r.returncode != 0:
+        raise PlanError("terraform show failed:\n" + _tail(r.stderr or r.stdout))
+    try:
+        return json.loads(r.stdout or "{}")
+    except ValueError as exc:
+        raise PlanError(f"terraform show didn't print JSON: {exc}") from exc
+
+
+def plan_directory(directory: str, extra_args=None, log=None, profile=None) -> dict:
     """Run terraform plan in a directory and return the JSON plan."""
     tf = terraform_bin()
     if not tf:
         raise PlanError("Terraform isn't installed or isn't in PATH.")
     directory = str(Path(directory).resolve())
-    fd, tmp = tempfile.mkstemp(prefix="awskit-", suffix=".tfplan", dir=directory)
-    os.close(fd)
+    # A saved plan holds variable values and often secrets, so it goes in a private temp
+    # folder, not in the Terraform folder where it could be left behind or committed.
+    tmpdir = tempfile.mkdtemp(prefix="awskit-plan-")
+    tmp = os.path.join(tmpdir, "plan.tfplan")
     try:
         cmd = [tf, "plan", "-input=false", "-no-color", f"-out={tmp}"] + list(extra_args or [])
         if log:
             log("Running " + " ".join(Path(c).name if i == 0 else c for i, c in enumerate(cmd)))
-        r = _run(cmd, cwd=directory)
+        r = _run(cmd, cwd=directory, profile=profile)
         if r.returncode != 0:
             raise PlanError("terraform plan failed:\n" + _tail(r.stderr or r.stdout))
         if log:
             log("Reading the plan")
-        return show_json(tmp)
+        return show_json(tmp, profile=profile, cwd=directory)
     finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def load_plan(source: str) -> dict:
-    """source can be JSON text, a .json file, a saved binary plan, or a Terraform folder."""
+def load_plan(source: str, profile=None, run_terraform=True) -> dict:
+    """source can be JSON text, a .json file, a saved binary plan, or a Terraform folder.
+    With run_terraform=False, a saved plan or a folder raises NeedsTerraform instead."""
     text = (source or "").strip()
     if text.startswith("{"):
         try:
             return json.loads(text)
-        except ValueError as exc:
+        except (ValueError, RecursionError) as exc:
             raise PlanError(f"That isn't valid plan JSON: {exc}") from exc
     path = Path(os.path.expanduser(text))
-    if path.is_dir():
-        return plan_directory(str(path))
-    if path.is_file():
-        data = path.read_bytes()
+    try:
+        is_dir = path.is_dir()
+        data = None if is_dir or not path.is_file() else path.read_bytes()
+    except OSError as exc:
+        raise PlanError(f"Couldn't read {path}: {exc}") from exc
+    if is_dir:
+        if not run_terraform:
+            raise NeedsTerraform(f"{path} is a folder. Reading it means running terraform "
+                                 "plan there.")
+        return plan_directory(str(path), profile=profile)
+    if data is not None:
         if data.lstrip()[:1] == b"{":
             try:
                 return json.loads(data.decode("utf-8"))
-            except ValueError as exc:
+            except (ValueError, RecursionError) as exc:
                 raise PlanError(f"{path.name} isn't valid JSON: {exc}") from exc
-        return show_json(str(path))
+        if not run_terraform:
+            raise NeedsTerraform(f"{path.name} is a saved plan. Reading it means running "
+                                 "terraform show in its folder.")
+        return show_json(str(path), profile=profile)
     raise PlanError("Give a plan JSON file, a saved plan file, or a Terraform folder.")
 
 
@@ -196,12 +289,48 @@ def path_text(path) -> str:
     return out
 
 
+def _module_path(module_address) -> tuple:
+    """module.net[0].module.sg["a"] -> ('net', 'sg'), the names the configuration uses."""
+    return tuple(re.findall(r'module\.([\w-]+)(?:\[(?:\d+|"(?:[^"\\]|\\.)*")\])?',
+                            module_address or ""))
+
+
+def configured_args(plan) -> dict | None:
+    """{(module path, type, name): names of the arguments set in the code}, from the plan's
+    configuration section, or None when the plan doesn't have one. dynamic blocks don't
+    show up there."""
+    root = (plan.get("configuration") or {}).get("root_module")
+    if not isinstance(root, dict):
+        return None
+    out = {}
+
+    def walk(module, path):
+        if not isinstance(module, dict):
+            return
+        for res in module.get("resources") or []:
+            if isinstance(res, dict) and res.get("mode", "managed") == "managed":
+                out[(path, res.get("type"), res.get("name"))] = set(res.get("expressions") or {})
+        for name, call in (module.get("module_calls") or {}).items():
+            if isinstance(call, dict):
+                walk(call.get("module"), path + (name,))
+    walk(root, ())
+    return out
+
+
 def summarize(plan: dict) -> PlanSummary:
-    if not isinstance(plan, dict) or ("resource_changes" not in plan and "format_version" not in plan):
-        raise PlanError("This doesn't look like `terraform show -json` output.")
+    # A plan always has planned_values (and resource_changes when anything changes). The
+    # state's terraform show -json has neither, and reading it as a plan would say
+    # "No changes" and "Nothing risky found".
+    if not isinstance(plan, dict) or ("resource_changes" not in plan and "planned_values" not in plan):
+        raise PlanError("That JSON isn't a Terraform plan. Give the output of terraform show "
+                        "-json on a saved plan (terraform plan -out), not on the state.")
+    rcs = plan.get("resource_changes") or []
+    if not isinstance(rcs, list):
+        raise PlanError("That JSON isn't a Terraform plan: resource_changes isn't a list.")
+    config = configured_args(plan)
     changes, risks = [], []
-    for rc in plan.get("resource_changes", []) or []:
-        if rc.get("mode") == "data":
+    for rc in rcs:
+        if not isinstance(rc, dict) or rc.get("mode") == "data":
             continue
         ch = rc.get("change") or {}
         action = action_of(ch.get("actions"))
@@ -214,7 +343,9 @@ def summarize(plan: dict) -> PlanSummary:
         if action == "replace":
             c.forces = [path_text(p) for p in ch.get("replace_paths") or []]
         changes.append(c)
-        risks += check_resource(rc, action, ch)
+        configured = None if config is None else config.get(
+            (_module_path(rc.get("module_address")), rc.get("type"), rc.get("name")))
+        risks += check_resource(rc, action, ch, configured)
 
     outputs = []
     for name, oc in (plan.get("output_changes") or {}).items():
@@ -296,7 +427,24 @@ POLICY_ATTRS = {
     "aws_secretsmanager_secret_policy": ("policy", "resource"),
     "aws_glacier_vault": ("access_policy", "resource"),
     "aws_organizations_policy": ("content", "scp"),
+    "aws_s3_bucket": ("policy", "resource"),
+    "aws_sqs_queue": ("policy", "resource"),
+    "aws_sns_topic": ("policy", "resource"),
 }
+
+# Arguments Terraform fills in by itself when the code doesn't set them, so a plan shows
+# them as "known after apply" whenever they're left out. They only get the "couldn't check"
+# note when the plan's configuration shows the code really sets them.
+SELF_FILLED = {
+    "aws_security_group": {"ingress"},
+    "aws_kms_key": {"policy"},
+    "aws_s3_bucket": {"policy", "acl"},
+    "aws_sqs_queue": {"policy"},
+    "aws_sns_topic": {"policy"},
+    "aws_iam_role": {"inline_policy", "managed_policy_arns"},
+}
+
+PUBLIC_ACLS = ("public-read", "public-read-write", "authenticated-read")
 
 
 def first(value):
@@ -310,8 +458,63 @@ def is_unknown(ch, key) -> bool:
     return isinstance(unk, dict) and unk.get(key) is True
 
 
+def has_unknown(value) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, dict):
+        return any(has_unknown(v) for v in value.values())
+    if isinstance(value, list):
+        return any(has_unknown(v) for v in value)
+    return False
+
+
+def unknown_risk(rtype, addr, ch, attr, configured=None, fields=()) -> list:
+    """An info risk when attr is only known after apply, so it doesn't look checked and fine.
+    fields: for a list of blocks, only these keys inside the blocks matter."""
+    unk = ch.get("after_unknown")
+    value = unk.get(attr) if isinstance(unk, dict) else None
+    if value is True:
+        if attr in SELF_FILLED.get(rtype, ()) and (configured is None or attr not in configured):
+            return []  # not set in the code, AWS fills it in
+    elif fields:
+        blocks = value if isinstance(value, list) else [value]
+        if not any(isinstance(b, dict) and has_unknown(b.get(f)) for b in blocks for f in fields):
+            return []
+    elif not has_unknown(value):
+        return []
+    return [Risk("info", addr, f"Couldn't check {attr}, it's only known after apply",
+                 "Terraform only works this value out while it applies, so the plan can't show "
+                 "what it allows.", "Check it after apply, for example with Exposure Audit or "
+                 "Policy Check.")]
+
+
 def world(cidrs) -> list:
     return [c for c in cidrs or [] if c in ("0.0.0.0/0", "::/0")]
+
+
+def acl_risks(addr, acl) -> list:
+    if acl not in PUBLIC_ACLS:
+        return []
+    return [Risk("high", addr, f"Bucket ACL is {acl}",
+                 "Objects can be read by anyone" +
+                 (" and written by anyone." if acl == "public-read-write" else "."),
+                 "Use private and serve public files through CloudFront with OAC.")]
+
+
+def admin_policy_risks(addr, arn) -> list:
+    arn = str(arn or "")
+    name = arn.rsplit("/", 1)[-1]
+    if name in ADMIN_POLICIES and ":aws:policy/" in arn:
+        return [Risk(ADMIN_POLICIES[name], addr, f"Attaches {name}",
+                     "This gives broad or full control of the account.",
+                     "Use a policy with only the actions this needs.")]
+    return []
+
+
+def public_db_risk(addr) -> Risk:
+    return Risk("high", addr, "Database is publicly accessible",
+                "It gets a public endpoint. Only its security group stands between it and the "
+                "internet.", "Set publicly_accessible = false.")
 
 
 def open_risk(sev, addr, label, cidrs) -> Risk:
@@ -323,11 +526,15 @@ def open_risk(sev, addr, label, cidrs) -> Risk:
                 "For admin access, SSM Session Manager needs no open ports at all.")
 
 
-def check_resource(rc, action, ch) -> list:
+def check_resource(rc, action, ch, configured=None) -> list:
+    """Risks for one resource change. configured is the set of arguments the code sets for
+    it (see configured_args), or None when the plan doesn't say."""
     rtype = rc.get("type", "")
     addr = rc.get("address", "")
     after = ch.get("after") or {}
     before = ch.get("before") or {}
+    if not isinstance(before, dict):
+        before = {}
     out = []
 
     if action in ("delete", "replace"):
@@ -347,25 +554,31 @@ def check_resource(rc, action, ch) -> list:
         return out
 
     # ---- network exposure
-    if rtype == "aws_security_group" and not is_unknown(ch, "ingress"):
+    if rtype == "aws_security_group":
         for rule in after.get("ingress") or []:
             cidrs = world((rule.get("cidr_blocks") or []) + (rule.get("ipv6_cidr_blocks") or []))
             if cidrs:
                 sev, label = open_port_risk(rule.get("protocol"), rule.get("from_port"),
                                             rule.get("to_port"))
                 out.append(open_risk(sev, addr, label, cidrs))
+        out += unknown_risk(rtype, addr, ch, "ingress", configured,
+                            fields=("cidr_blocks", "ipv6_cidr_blocks"))
     elif rtype == "aws_security_group_rule" and after.get("type") == "ingress":
         cidrs = world((after.get("cidr_blocks") or []) + (after.get("ipv6_cidr_blocks") or []))
         if cidrs:
             sev, label = open_port_risk(after.get("protocol"), after.get("from_port"),
                                         after.get("to_port"))
             out.append(open_risk(sev, addr, label, cidrs))
+        for attr in ("cidr_blocks", "ipv6_cidr_blocks"):
+            out += unknown_risk(rtype, addr, ch, attr, configured)
     elif rtype == "aws_vpc_security_group_ingress_rule":
         cidrs = world([after.get("cidr_ipv4"), after.get("cidr_ipv6")])
         if cidrs:
             sev, label = open_port_risk(after.get("ip_protocol"), after.get("from_port"),
                                         after.get("to_port"))
             out.append(open_risk(sev, addr, label, cidrs))
+        for attr in ("cidr_ipv4", "cidr_ipv6"):
+            out += unknown_risk(rtype, addr, ch, attr, configured)
 
     # ---- S3
     elif rtype in ("aws_s3_bucket_public_access_block", "aws_s3_account_public_access_block"):
@@ -377,30 +590,37 @@ def check_resource(rc, action, ch) -> list:
                             "Off: " + ", ".join(off) + ".",
                             "Set all four to true unless this bucket is meant to be public."))
     elif rtype == "aws_s3_bucket_acl":
-        acl = after.get("acl")
-        if acl in ("public-read", "public-read-write", "authenticated-read"):
-            out.append(Risk("high", addr, f"Bucket ACL is {acl}",
-                            "Objects can be read by anyone" +
-                            (" and written by anyone." if acl == "public-read-write" else "."),
-                            "Use private and serve public files through CloudFront with OAC."))
+        out += acl_risks(addr, after.get("acl"))
         for grant in (first(after.get("access_control_policy")).get("grant") or []):
             uri = str(first(grant.get("grantee")).get("uri", ""))
             if uri.endswith("/AllUsers") or uri.endswith("/AuthenticatedUsers"):
                 out.append(Risk("high", addr, "Bucket ACL grants access to everyone",
                                 f"Grantee {uri.rsplit('/', 1)[-1]} gets {grant.get('permission')}."))
-    elif rtype == "aws_s3_bucket" and after.get("force_destroy") is True:
-        out.append(Risk("low", addr, "force_destroy is on",
-                        "terraform destroy will delete this bucket even with objects in it."))
+    elif rtype == "aws_s3_bucket":
+        out += acl_risks(addr, after.get("acl"))  # the older inline acl argument
+        out += unknown_risk(rtype, addr, ch, "acl", configured)
+        if after.get("force_destroy") is True:
+            out.append(Risk("low", addr, "force_destroy is on",
+                            "terraform destroy will delete this bucket even with objects in it."))
 
     # ---- IAM attachments and keys
     elif rtype in ("aws_iam_role_policy_attachment", "aws_iam_user_policy_attachment",
                    "aws_iam_group_policy_attachment", "aws_iam_policy_attachment"):
-        arn = str(after.get("policy_arn") or "")
-        name = arn.rsplit("/", 1)[-1]
-        if name in ADMIN_POLICIES and ":aws:policy/" in arn:
-            out.append(Risk(ADMIN_POLICIES[name], addr, f"Attaches {name}",
-                            "This gives broad or full control of the account.",
-                            "Use a policy with only the actions this needs."))
+        out += admin_policy_risks(addr, after.get("policy_arn"))
+    elif rtype == "aws_iam_role":
+        # managed_policy_arns and inline_policy, both deprecated but still used. Only what's
+        # new in this plan gets flagged, like the policy checks below.
+        had = set(before.get("managed_policy_arns") or [])
+        for arn in after.get("managed_policy_arns") or []:
+            if arn not in had:
+                out += admin_policy_risks(addr, arn)
+        out += unknown_risk(rtype, addr, ch, "managed_policy_arns", configured)
+        had = {b.get("policy") for b in before.get("inline_policy") or [] if isinstance(b, dict)}
+        for block in after.get("inline_policy") or []:
+            if isinstance(block, dict) and block.get("policy") not in had:
+                where = f"inline policy {block['name']}" if block.get("name") else "inline policy"
+                out += check_policy_text(addr, block.get("policy"), "identity", where)
+        out += unknown_risk(rtype, addr, ch, "inline_policy", configured, fields=("policy",))
     elif rtype == "aws_iam_access_key" and action == "create":
         out.append(Risk("medium", addr, "Creates a long-lived access key",
                         "Access keys don't expire and are the most common thing to leak.",
@@ -437,9 +657,7 @@ def check_resource(rc, action, ch) -> list:
         out.append(Risk("medium", addr, "Turns off EBS encryption by default"))
     elif rtype == "aws_db_instance":
         if after.get("publicly_accessible") is True:
-            out.append(Risk("high", addr, "Database is publicly accessible",
-                            "It gets a public endpoint. Only its security group stands between "
-                            "it and the internet.", "Set publicly_accessible = false."))
+            out.append(public_db_risk(addr))
         if after.get("storage_encrypted") is False:
             out.append(Risk("medium", addr, "Database storage not encrypted",
                             "Encryption can't be turned on later without a rebuild.",
@@ -447,6 +665,8 @@ def check_resource(rc, action, ch) -> list:
     elif rtype == "aws_rds_cluster" and after.get("storage_encrypted") is False:
         out.append(Risk("medium", addr, "Aurora storage not encrypted",
                         fix="Set storage_encrypted = true."))
+    elif rtype == "aws_rds_cluster_instance" and after.get("publicly_accessible") is True:
+        out.append(public_db_risk(addr))
     elif rtype == "aws_kms_key":
         if after.get("enable_key_rotation") is False and \
                 str(after.get("customer_master_key_spec") or "SYMMETRIC_DEFAULT") == "SYMMETRIC_DEFAULT":
@@ -492,16 +712,17 @@ def check_resource(rc, action, ch) -> list:
     # ---- policy documents, checked with the Policy Check rules
     if rtype in POLICY_ATTRS:
         attr, kind = POLICY_ATTRS[rtype]
-        out += check_policy_attr(addr, after, before, attr, kind, ch)
+        out += unknown_risk(rtype, addr, ch, attr, configured)
+        text = after.get(attr)
+        if text != before.get(attr):  # unchanged policy, don't re-flag it on every plan
+            out += check_policy_text(addr, text, kind)
     return out
 
 
-def check_policy_attr(addr, after, before, attr, kind, ch) -> list:
-    text = after.get(attr)
-    if not text or is_unknown(ch, attr) or not isinstance(text, str):
+def check_policy_text(addr, text, kind, where="") -> list:
+    """Policy Check's medium and worse findings for one policy document, as risks."""
+    if not text or not isinstance(text, str):
         return []
-    if text == (before or {}).get(attr):
-        return []  # unchanged policy, don't re-flag it on every plan
     try:
         doc, _ = iampolicy.load_policy(text)
     except iampolicy.PolicyError:
@@ -509,7 +730,8 @@ def check_policy_attr(addr, after, before, attr, kind, ch) -> list:
     out = []
     for f in iampolicy.analyze(doc, kind):
         if f.severity in ("critical", "high", "medium"):
-            detail = f.detail + (f" ({f.where})" if f.where else "")
+            places = ", ".join(p for p in (where, f.where) if p)
+            detail = f.detail + (f" ({places})" if places else "")
             out.append(Risk(f.severity, addr, f.title, detail, f.fix))
     return out
 

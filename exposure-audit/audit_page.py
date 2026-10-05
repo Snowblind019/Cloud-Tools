@@ -102,9 +102,11 @@ class AuditPage(Page):
                              "permission, see the notes below.")
         self.show_counts()
         self.apply_level()
-        self.status.idle(f"Audit finished at {datetime.now():%H:%M}.")
-        if warnings:
-            self.detail.set_text("Notes from the audit:\n\n" + "\n".join(warnings))
+        # Notes are what couldn't be checked, so point them out. Clear old ones otherwise.
+        self.status.idle(f"Audit finished at {datetime.now():%H:%M}." +
+                         (f" {len(warnings)} note(s) on what couldn't be checked, below."
+                          if warnings else ""))
+        self.detail.set_text("Notes from the audit:\n\n" + "\n".join(warnings) if warnings else "")
 
     def failed(self, exc):
         self.run_btn.set_sensitive(True)

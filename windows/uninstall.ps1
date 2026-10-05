@@ -6,6 +6,11 @@ Your settings in %APPDATA%\awskit and your AWS profiles in ~\.aws are kept.
 param([switch]$Quiet)
 
 $ErrorActionPreference = 'Continue'
+if (-not $env:LOCALAPPDATA) {
+    Write-Host 'LOCALAPPDATA is not set, so the AWS Kit folder cannot be found.' -ForegroundColor Red
+    exit 1
+}
+$System32 = Join-Path $env:SystemRoot 'System32'
 $Root = Join-Path $env:LOCALAPPDATA 'AWSKit'
 $Bin = Join-Path $Root 'bin'
 $ProgId = 'AWSKit.ImageRedact'
@@ -23,7 +28,7 @@ foreach ($link in (Join-Path $programs 'Image Redact.lnk'),
 }
 
 # The Lab Sweep daily check, if it was turned on.
-& schtasks.exe /Delete /F /TN 'AWS Kit Lab Sweep' 2>$null | Out-Null
+& (Join-Path $System32 'schtasks.exe') /Delete /F /TN 'AWS Kit Lab Sweep' 2>$null | Out-Null
 
 Remove-Item -Path "HKCU:\Software\Classes\$ProgId" -Recurse -Force -ErrorAction SilentlyContinue
 foreach ($ext in '.png', '.jpg', '.jpeg', '.bmp', '.webp') {
@@ -33,10 +38,20 @@ foreach ($key in 'AWSKit', 'AWSKit-ImageRedact') {
     Remove-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$key" -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-if ($userPath) {
-    $kept = ($userPath -split ';') | Where-Object { $_ -and $_ -ne $Bin }
-    [Environment]::SetEnvironmentVariable('Path', ($kept -join ';'), 'User')
+# Read and written as stored, so other entries like %USERPROFILE%\bin stay as they are.
+$envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+if ($envKey) {
+    try {
+        $userPath = $envKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if ($userPath -and (($userPath -split ';') -contains $Bin)) {
+            $kept = ($userPath -split ';') | Where-Object { $_ -and $_ -ne $Bin }
+            $envKey.SetValue('Path', ($kept -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)
+            [Environment]::SetEnvironmentVariable('AWSKIT_PATH_REFRESH', '1', 'User')
+            [Environment]::SetEnvironmentVariable('AWSKIT_PATH_REFRESH', $null, 'User')
+        }
+    } finally {
+        $envKey.Close()
+    }
 }
 
 # The private Python, if the installer had to add one.
@@ -48,7 +63,7 @@ if (Test-Path $setup) {
 
 # This script lives inside the folder it's deleting, so the delete runs just after it exits.
 if (Test-Path $Root) {
-    Start-Process -FilePath 'cmd.exe' -WindowStyle Hidden -ArgumentList "/c timeout /t 2 /nobreak >nul & rmdir /s /q `"$Root`""
+    Start-Process -FilePath (Join-Path $System32 'cmd.exe') -WindowStyle Hidden -ArgumentList "/c timeout /t 2 /nobreak >nul & rmdir /s /q `"$Root`""
 }
 
 Write-Host ''

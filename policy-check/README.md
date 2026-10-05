@@ -18,7 +18,7 @@ Writing least-privilege policies is a big part of AWS security, and there are a 
 - URL-encoded policy JSON, the way some IAM API responses return it
 - A JSON string that holds the policy
 
-If it can't read what you pasted, it says why, with the line number for JSON errors.
+If it can't read what you pasted, it says why, with the line number for JSON errors. Anything over 1 MB, or nested deeper than a policy ever is, gets turned away with a message. Checking happens in the background, so a huge paste doesn't freeze the window.
 
 ## Policy types
 
@@ -61,7 +61,7 @@ The type matters, because some checks only make sense for some types. Privilege 
 | Reads sensitive data on any resource | medium | Like `s3:GetObject`, `kms:Decrypt` or `secretsmanager:GetSecretValue` on `*` |
 | Destructive actions on any resource | medium | Like `s3:DeleteBucket`, `kms:ScheduleKeyDeletion` or `rds:DeleteDBInstance` on `*` |
 
-Wildcards in actions are expanded, so `iam:Put*` counts as `iam:PutRolePolicy`, `iam:PutUserPolicy` and so on. A resource counts as "any" when it's `*` or a wildcard ARN like `arn:aws:s3:::*` or `arn:aws:iam::111111111111:role/*`.
+Wildcards in actions are expanded, so `iam:Put*` counts as `iam:PutRolePolicy`, `iam:PutUserPolicy` and so on. A resource counts as "any" when it's `*`, a wildcard ARN like `arn:aws:s3:::*`, `arn:aws:iam::111111111111:role/*` or `arn:aws:iam::111111111111:role*`, or an ARN with a wildcard for the partition, service or account, like `arn:*`, `arn:aws:*` or `arn:aws:iam::*:role/admin`.
 
 <details>
 <summary>Privilege escalation actions it knows</summary>
@@ -92,12 +92,12 @@ Services that run as a role when paired with `iam:PassRole`: `ec2:RunInstances`,
 | Finding | Severity | Why |
 |---|---|---|
 | `"Principal": "*"` with no condition | critical | Anyone gets in. For a trust policy, any AWS account in the world can assume the role. |
-| `"Principal": "*"` with a condition that doesn't limit who | high | The condition doesn't use a key like `aws:PrincipalOrgID`, `aws:SourceAccount` or `aws:SourceArn` |
+| `"Principal": "*"` with a condition that doesn't limit who | high | The condition doesn't use a key like `aws:PrincipalOrgID`, `aws:SourceAccount` or `aws:SourceArn`, or uses it in a way that doesn't narrow anything (see below) |
 | `"Principal": "*"` narrowed by a limiting condition | info | Probably fine. Check the values are yours. |
 | `NotPrincipal` in an Allow | high | Everyone except the listed principals gets in |
 | Cross-account principal | info | Lists the other accounts. For a trust policy that names a whole account with no `sts:ExternalId`, it notes that anyone in that account with `sts:AssumeRole` can get in. |
-| GitHub OIDC trust with no `sub` condition | critical | Any GitHub Actions workflow in any repo can assume the role |
-| GitHub OIDC `sub` that's `*`, `repo:*`, or starts with `*` | high | Close to any repo |
+| GitHub OIDC trust with no `sub` condition, or only a Not operator on it like `StringNotLike` | critical | Any GitHub Actions workflow in any repo can assume the role |
+| GitHub OIDC `sub` with a wildcard before the owner, like `*`, `repo:*`, `repo:*:*` or `repo:*/app:*` | high | Repos owned by anyone |
 | GitHub OIDC `sub` like `repo:my-org/*` | medium | Any repo in the org, any branch |
 | GitHub OIDC trust with no `aud` condition | low | Should require `sts.amazonaws.com` |
 | Another federated provider with no conditions | medium | Any identity from that provider may get in |
@@ -105,6 +105,15 @@ Services that run as a role when paired with `iam:PassRole`: `ec2:RunInstances`,
 | `sts:AssumeRoleWithWebIdentity` with no federated principal | medium | Doesn't make sense, usually a typo |
 
 Condition keys that count as limiting who: `aws:SourceArn`, `aws:SourceAccount`, `aws:SourceOwner`, `aws:SourceOrgID`, `aws:SourceOrgPaths`, `aws:PrincipalOrgID`, `aws:PrincipalOrgPaths`, `aws:PrincipalAccount`, `aws:PrincipalArn`, `aws:PrincipalServiceName`, `aws:SourceVpce`, `aws:SourceVpc`, `aws:SourceIp`, `aws:userid`, `aws:username`, `aws:ResourceOrgID`, `s3:DataAccessPointAccount`, `kms:CallerAccount`, `kms:ViaService`, `sts:ExternalId`, `lambda:FunctionUrlAuthType`, `sns:Endpoint`, `elasticfilesystem:AccessPointArn`.
+
+They only count with an operator that lets in just the matching values: `StringEquals`, `StringEqualsIgnoreCase`, `StringLike`, `ArnEquals`, `ArnLike` or `IpAddress` (with or without `ForAnyValue:`), and a value that isn't wide open. These don't narrow anything:
+
+- A Not operator, like `StringNotEquals` on `aws:PrincipalOrgID`, which lets in everyone outside the org
+- `Null`, which only checks whether the key is there
+- `...IfExists` and `ForAllValues:`, which also pass when the key is missing, as it is for anonymous callers
+- A value of `*`, an ARN with a wildcard for the partition, service or account (like `arn:aws:s3:::*`), or a public IP range of /8 or wider (/16 for IPv6), `0.0.0.0/0` included
+
+Only `StringLike`, `ArnEquals` and `ArnLike` treat `*` as a wildcard. With `StringEquals` it's a plain character. Conditions all have to match, so one that narrows is enough. The GitHub `sub` checks work the same way: a Not operator never counts as the repo check, and the tightest `sub` condition decides.
 
 ### Size
 
@@ -138,6 +147,8 @@ Type into the box above the editor and press **Load from AWS**:
 |---|---|
 | A managed policy ARN, like `arn:aws:iam::aws:policy/PowerUserAccess` or one of your own | The policy's default version, as an identity policy |
 | A role ARN, or `role/NAME` | The role's trust policy |
+
+IAM looks roles up by name only, so a role ARN from a different account than the profile's is turned away instead of loading the role with the same name in your account. Use a profile for that account.
 
 ## Using it in the window
 
@@ -231,7 +242,7 @@ None for the local checks. For the AWS features:
 
 ## Limits
 
-- It reads the policy, it doesn't simulate it. It checks which condition keys are present, not whether their values make sense. For "can this role do X", use the IAM policy simulator.
+- It reads the policy, it doesn't simulate it. It checks the condition keys and operators and spots values that are wide open, but it can't tell whether an org ID or account is yours. For "can this role do X", use the IAM policy simulator.
 - It doesn't know which accounts are yours, so cross-account access is info, not a warning.
 - The risky action lists are hand-picked. A new AWS action that's risky won't be flagged until it's added. Access Analyzer helps cover the gap.
 - It checks one policy at a time. A role with several policies, a permissions boundary and an SCP above it can be more or less powerful than any one policy looks.

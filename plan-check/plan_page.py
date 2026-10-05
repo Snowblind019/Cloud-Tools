@@ -9,8 +9,9 @@ from gi.repository import Gdk, GLib, Gtk
 
 from . import tfplan
 from .common import SEVERITY_ORDER, have_pii_redact, pii_redact
-from .widgets import (DetailPane, Page, ResultTable, button, flash, label, on_main, open_file,
-                      run_bg, save_text, set_clipboard, show_message, spacer, vbox)
+from .widgets import (DetailPane, Page, ResultTable, button, confirm_terraform, flash, label,
+                      on_main, open_file, run_bg, save_text, set_clipboard, show_message, spacer,
+                      vbox)
 
 
 class PlanPage(Page):
@@ -24,6 +25,9 @@ class PlanPage(Page):
                    ("address", "Resource", {"width": 260, "kind": "mono"}),
                    ("info", "Details", {"expand": True})]
     ORDER = {"delete": 0, "replace": 1, "update": 2, "create": 3, "forget": 4}
+    NO_PLAN = "No plan loaded yet."
+    RISKS_EMPTY = "Risky changes show up here."
+    CHANGES_EMPTY = "Creates, updates, replaces and destroys show up here."
 
     def __init__(self, win):
         super().__init__(win, "Turns a Terraform plan into a short list of what changes and "
@@ -51,7 +55,7 @@ class PlanPage(Page):
         bar.append(button("Save Markdown", self.save_md))
         self.append(bar)
 
-        self.headline = label("No plan loaded yet.", "headline", wrap=True)
+        self.headline = label(self.NO_PLAN, "headline", wrap=True)
         self.headline.set_margin_start(12)
         self.headline.set_margin_bottom(6)
         self.append(self.headline)
@@ -60,13 +64,13 @@ class PlanPage(Page):
         left = vbox(4)
         left.append(self.section("Things to look at"))
         self.risks = ResultTable(self.RISK_COLS, on_select=self.risk_selected, search=False,
-                                 placeholder="Risky changes show up here.")
+                                 placeholder=self.RISKS_EMPTY)
         self.risks.set_vexpand(True)
         left.append(self.risks)
         right = vbox(4)
         right.append(self.section("Changes"))
         self.changes = ResultTable(self.CHANGE_COLS, on_select=self.change_selected, search=False,
-                                   placeholder="Creates, updates, replaces and destroys show up here.")
+                                   placeholder=self.CHANGES_EMPTY)
         self.changes.set_vexpand(True)
         right.append(self.changes)
         lr.set_start_child(left)
@@ -103,7 +107,9 @@ class PlanPage(Page):
         self.folder_btn.set_tooltip_text(path)
         self.run_btn.set_sensitive(True)
 
-    def run_plan(self):
+    def run_plan(self, trusted=False):
+        """terraform plan runs the folder's code with your AWS credentials, so ask first,
+        unless trusted (a folder AWS Kit wrote itself)."""
         if not self.folder:
             return
         if not tfplan.terraform_bin():
@@ -111,21 +117,56 @@ class PlanPage(Page):
                          "Install terraform or tofu, or open a plan JSON file instead.")
             return
         folder = self.folder
+        if trusted:
+            self._plan(folder)
+        else:
+            confirm_terraform(self.win, folder, lambda: self._plan(folder))
+
+    def _plan(self, folder):
+        profile = self.win.profile
         self.run_btn.set_sensitive(False)
         self.status.busy(f"Running terraform plan in {folder}...", progress=False)
         log = on_main(self.status.text.set_text)
-        run_bg(lambda: tfplan.plan_directory(folder, log=log), self.loaded, self.failed)
+        self.read(lambda: tfplan.plan_directory(folder, log=log, profile=profile))
+
+    def read(self, load):
+        """Load and summarize in the background, so a big plan doesn't freeze the window."""
+        run_bg(lambda: tfplan.summarize(load()), self.loaded, self.failed)
 
     def open_plan(self):
         open_file(self.win, self.load_path, "Open plan")
 
     def load_path(self, path):
-        if os.path.isdir(path):
+        if os.path.isdir(path):  # a folder only gets picked, run_plan asks before planning
             self.set_folder(path)
             self.run_plan()
             return
         self.status.busy(f"Reading {Path(path).name}...", progress=False)
-        run_bg(lambda: tfplan.load_plan(path), self.loaded, self.failed)
+
+        def not_json(exc):
+            if isinstance(exc, tfplan.NeedsTerraform):
+                self.status.idle("")
+                self.show_saved_plan(path)
+            else:
+                self.failed(exc)
+        # JSON is read straight away. A saved plan needs terraform show, which asks first.
+        run_bg(lambda: tfplan.summarize(tfplan.load_plan(path, run_terraform=False)),
+               self.loaded, not_json)
+
+    def show_saved_plan(self, path):
+        """terraform show starts the providers in the plan's folder, so it asks first too."""
+        if not tfplan.terraform_bin():
+            show_message(self.win, "Terraform isn't installed",
+                         "Reading a saved plan needs terraform or tofu. Open the output of "
+                         "terraform show -json instead.")
+            return
+        folder = str(Path(path).resolve().parent)
+        profile = self.win.profile
+
+        def go():
+            self.status.busy(f"Running terraform show on {Path(path).name}...", progress=False)
+            self.read(lambda: tfplan.show_json(path, profile=profile))
+        confirm_terraform(self.win, folder, go, what="terraform show")
 
     def dropped(self, target, value, x, y):
         files = value.get_files()
@@ -140,23 +181,28 @@ class PlanPage(Page):
                 text = clip.read_text_finish(result)
             except GLib.Error:
                 text = None
+            text = (text or "").strip()
             if not text:
                 show_message(self.win, "The clipboard is empty")
                 return
-            try:
-                self.loaded(tfplan.load_plan(text))
-            except tfplan.PlanError as exc:
-                self.failed(exc)
+            if not text.startswith("{"):  # never a path, that would run terraform
+                show_message(self.win, "That isn't plan JSON",
+                             "Paste JSON only reads the output of terraform show -json. To "
+                             "plan a folder, use Choose folder.")
+                return
+            self.status.busy("Reading the pasted plan...", progress=False)
+            self.read(lambda: tfplan.load_plan(text, run_terraform=False))
         self.get_clipboard().read_text_async(None, got)
 
-    def loaded(self, plan):
+    def loaded(self, summary):
         self.run_btn.set_sensitive(bool(self.folder))
         try:
-            self.summary = tfplan.summarize(plan)
-        except tfplan.PlanError as exc:
+            self.show_summary(summary)
+        except Exception as exc:  # noqa: BLE001 - never leave an older result showing
             self.failed(exc)
-            return
-        s = self.summary
+
+    def show_summary(self, s):
+        self.summary = s
         risk_rows = []
         for r in s.risks:
             d = r.as_dict()
@@ -187,7 +233,13 @@ class PlanPage(Page):
     def failed(self, exc):
         self.run_btn.set_sensitive(bool(self.folder))
         self.status.idle("")
-        show_message(self.win, "Couldn't read the plan", str(exc))
+        # Clear what was showing, so an older "Nothing risky found" can't pass for this plan.
+        self.summary = None
+        self.headline.set_text("Couldn't read the plan.")
+        self.risks.clear(self.RISKS_EMPTY)
+        self.changes.clear(self.CHANGES_EMPTY)
+        self.detail.set_text("")
+        show_message(self.win, "Couldn't read the plan", str(exc) or type(exc).__name__)
 
     # ---- details
     def risk_selected(self, row):

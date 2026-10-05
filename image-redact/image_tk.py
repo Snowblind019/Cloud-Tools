@@ -30,6 +30,7 @@ BG = (0.93, 0.93, 0.94)
 INK = (0.13, 0.13, 0.15, 1.0)
 INK_OFF = (0.6, 0.6, 0.63, 1.0)
 APP_ID = "Snowblind019.AWSKit.ImageRedact"
+LOG_LIMIT = 1_000_000  # bytes
 
 
 # =================================================================== small helpers
@@ -477,20 +478,30 @@ class TkEditor:
 
     def _report_error(self, exc, value, tb):
         text = "".join(traceback.format_exception(exc, value, tb))
+        log = CONFIG_DIR / "image-redact.log"
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            with open(CONFIG_DIR / "image-redact.log", "a", encoding="utf-8") as fh:
+            # Start the log over once it gets big, so it can't fill the disk.
+            try:
+                mode = "w" if log.stat().st_size > LOG_LIMIT else "a"
+            except OSError:
+                mode = "a"
+            with open(log, mode, encoding="utf-8") as fh:
                 fh.write(text + "\n")
         except OSError:
             pass
         self.set_status(f"Something went wrong: {value}. Details are in "
-                        f"{ir.short_path(str(CONFIG_DIR / 'image-redact.log'))}")
+                        f"{ir.short_path(str(log))}")
 
     def _update_state(self):
         have = self.ed.surface is not None
-        for w in (self.save_btn, self.copy_btn, self.name_entry, self.folder_btn):
+        # Nothing goes out while text detection is still deciding what to cover.
+        ready = have and not self.ed.finding
+        for w in (self.save_btn, self.copy_btn):
+            w.state(["!disabled"] if ready else ["disabled"])
+        for w in (self.name_entry, self.folder_btn):
             w.state(["!disabled"] if have else ["disabled"])
-        self.find_btn.state(["!disabled"] if have and self.ocr_ok else ["disabled"])
+        self.find_btn.state(["!disabled"] if ready and self.ocr_ok else ["disabled"])
         self.undo_btn.state(["!disabled"] if self.ed.undo_stack else ["disabled"])
         self.redo_btn.state(["!disabled"] if self.ed.redo_stack else ["disabled"])
         self.delete_btn.state(["!disabled"] if self.ed.selected is not None else ["disabled"])
@@ -792,7 +803,8 @@ class TkEditor:
         self._settings = RedactSettings(self.root, self._redact_settings_saved)
 
     def _redact_settings_saved(self):
-        if self.ed.passes is not None:
+        # While the text is being read again, the new settings apply when that's done.
+        if self.ed.passes is not None and not self.ed.finding:
             self.set_status(self.ed.apply_passes())
             self.refresh()
 
@@ -878,29 +890,24 @@ class TkEditor:
     # ================================================================== detection
     def find_pii(self):
         ed = self.ed
-        if ed.png is None or not self.ocr_ok:
+        if ed.png is None or not self.ocr_ok or ed.finding:
             return
-        if ed.passes is not None:
+        if ed.passes is not None and not ed.ocr_warning:
             self.set_status(ed.apply_passes())
             self.refresh()
             return
-        gen, png, lang = ed.generation, ed.png, ed.cfg["language"]
-        self.find_btn.state(["disabled"])
+        png, lang = ed.png, ed.cfg["language"]
+        gen = ed.start_finding()
+        self._update_state()
         self.set_status("Reading the text in the image...", busy=True)
 
-        def done(passes):
-            if gen != ed.generation:
-                return
-            ed.passes = passes
-            self.set_status(ed.apply_passes())
-            self.refresh()
-
-        def failed(exc):
-            if gen != ed.generation:
-                return
-            self.set_status(str(exc).splitlines()[0])
-            self._update_state()
-        self.run_bg(lambda: ir.read_text(png, lang), done, failed)
+        def finished(msg):
+            if msg is not None:
+                self.set_status(msg)
+                self.refresh()
+        self.run_bg(lambda: ir.read_text(png, lang),
+                    lambda passes: finished(ed.found(gen, passes)),
+                    lambda exc: finished(ed.find_failed(gen, exc)))
 
     # ================================================================== files
     def _update_folder_button(self):
@@ -985,6 +992,9 @@ class TkEditor:
     def save(self):
         if self.ed.surface is None:
             return
+        if self.ed.finding:
+            self.set_status(ie.BUSY, busy=True)
+            return
         self.apply_name(quiet=True)
         plan = self.ed.plan_save()
         self._show_outcome(plan if plan.kind == "ask" else self.ed.write(plan.dest))
@@ -992,12 +1002,16 @@ class TkEditor:
     def copy(self):
         if self.ed.surface is None:
             return
+        if self.ed.finding:
+            self.set_status(ie.BUSY, busy=True)
+            return
         try:
             png = self.ed.copy_png()
             write_clipboard_image(png)
         except (ir.ImageError, ClipboardError) as exc:
             self.set_status(str(exc))
             return
+        self.ed.copied()  # only once it's really on the clipboard
         self.set_status("Copied the finished image. It's ready to paste.")
 
     def close(self):

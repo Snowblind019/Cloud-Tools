@@ -31,6 +31,7 @@ from .common import (APP_ID, APP_NAME, CURRENT_PROFILE_FILE, IMAGE_APP_ID,  # no
                      PICKER_APP_ID, REDACT_APP_ID, REDACT_SETTINGS_APP_ID, VERSION)
 from .audit_page import AuditPage  # noqa: E402
 from .image_page import ImagePage, ImageWindow  # noqa: E402
+from .map_page import MapPage  # noqa: E402
 from .plan_page import PlanPage  # noqa: E402
 from .policy_page import PolicyPage  # noqa: E402
 from .profiles_page import PickerWindow, ProfilesPage  # noqa: E402
@@ -40,7 +41,7 @@ from .trail_page import TrailPage  # noqa: E402
 from .widgets import button, clear_box, hbox, install_css, label, margins, vbox  # noqa: E402
 
 PAGE_CLASSES = [RedactPage, ImagePage, SweepPage, AuditPage, TrailPage, PlanPage, PolicyPage,
-                ProfilesPage]
+                ProfilesPage, MapPage]
 PAGES = [cls.name for cls in PAGE_CLASSES]
 
 # Small windows that open on their own, for keybinds and launcher entries.

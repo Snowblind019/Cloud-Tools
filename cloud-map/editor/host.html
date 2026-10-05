@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<title>__TITLE__ - draw.io in AWS Kit</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: __BACKGROUND__; }
+  body { font: 13px system-ui, "Segoe UI", Cantarell, sans-serif; color: __TEXT__; }
+  iframe { border: 0; width: 100%; height: 100%; display: block; }
+  #note { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+          text-align: center; padding: 40px; background: __BACKGROUND__; }
+  #note.show { display: flex; }
+</style>
+</head>
+<body>
+<!--
+  AWS Kit's host page for the offline draw.io editor. It loads draw.io from the files AWS
+  Kit downloaded, in embed mode, and speaks draw.io's JSON embed protocol: on init it
+  fetches the diagram from AWS Kit and loads it, on save it posts the XML back, and on
+  exit it tells AWS Kit and closes. Everything is served by AWS Kit on 127.0.0.1 only,
+  and the server's Content-Security-Policy stops the page from reaching anywhere else.
+-->
+<iframe id="drawio" src="__DRAWIO_URL__" title="draw.io editor"></iframe>
+<div id="note"><div id="note-text"></div></div>
+<script src="host.js"></script>
+</body>
+</html>

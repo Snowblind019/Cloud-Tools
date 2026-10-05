@@ -65,10 +65,10 @@ Items marked **manual** need several steps to delete properly, so teardown leave
 2. Pick **Regions**, or leave it on **All enabled**.
 3. Press **Scan**. Progress shows at the bottom, and **Stop** cancels.
 4. Click a row to see everything about it in the details pane, including tags, notes, and why it can't be deleted if that's the case.
-5. Tick rows to delete, or press **Tick everything deletable**. Kept and manual rows can't be ticked.
+5. Tick rows to delete, or press **Tick everything deletable**. Kept and manual rows can't be ticked. **Tick everything deletable** only ticks the rows the filter is showing. If some ticked rows are hidden by the filter, the count next to **Delete ticked** and the confirm window both say how many, and the confirm window marks them.
 6. Press **Dry run** to see the order teardown would go in, without touching anything.
 7. Press **Delete ticked**. A window lists everything that will be deleted. Type `delete` and press Delete.
-8. Each row's Teardown column changes to **deleted** or **failed**, and the details pane shows what happened to each one.
+8. Each row's Teardown column changes to **deleted**, **kept** or **failed**, and the details pane shows what happened to each one. While a teardown runs, **Scan**, **Month-to-date spend** and **Delete ticked** stay off, and **Stop** stops the teardown after the item it's on.
 9. Scan again in a few minutes. Some things take a while to go away, and some only free up what depended on them once they're gone.
 
 Other buttons:
@@ -122,7 +122,7 @@ That writes two systemd user units, `~/.config/systemd/user/awskit-sweep.service
 - sends a desktop notification listing the five most expensive items, if the estimated monthly total is above `notify_threshold` (default $1) or anything usage-based is running
 - marks the notification urgent above $20 a month
 - publishes the full list to `sns_topic` if you set one, which is handy for an email copy
-- sends a "couldn't run" notification instead if sign-in has expired
+- sends a "couldn't run" notification instead if sign-in has expired, or if nothing was found but some checks couldn't run (no connection, or AWS turned the credentials away in a region)
 
 It checks the profiles in `timer_profiles`, or the current profile if that's empty. SSO sign-ins usually last 8 to 12 hours, so the check only works if you signed in that day. A profile with long-lived keys or a role works any time.
 
@@ -134,8 +134,10 @@ Check on it with `systemctl --user list-timers awskit-sweep.timer`, and turn it 
 
 - **Scanning never changes anything.** It only uses describe, list and get calls.
 - **Nothing is deleted unless you tick it** and type `delete`. Teardown in the terminal works the same way.
-- **Keep tag.** Anything tagged `awskit:keep` (any value) shows as kept and can't be ticked. Change the tag key in Settings. The tag is read where AWS returns tags with the listing: EC2 instances, NAT gateways, Elastic IPs, volumes, snapshots, AMIs, VPC endpoints, VPNs, transit gateway attachments, Client VPN, RDS instances and clusters, and secrets. For anything else, use the keep list.
+- **Keep tag.** Anything tagged `awskit:keep` (any value) shows as kept and can't be ticked. Change the tag key in Settings. The tag is read where AWS returns tags with the listing: EC2 instances, NAT gateways, Elastic IPs, volumes, snapshots, AMIs, VPC endpoints, VPNs, transit gateway attachments, Client VPN, Network Firewall, RDS instances, clusters and snapshots, secrets, CloudHSM and GuardDuty. For anything else, use the keep list.
 - **Keep list.** IDs, ARNs or names listed in Settings are always kept.
+- **Keep rules are checked again.** Saving Settings works out which rows are kept again, and teardown reads the keep list and keep tag key again right before each item, so something you keep after the scan is still skipped.
+- **Checks the account.** Right before deleting, teardown checks that each item's profile still points at the account the scan found it in. If the profile was changed to another account since the scan (config edited, SSO set up again), those items are skipped and you're asked to scan again. That matters because deletes go by name or ID, and turning off Security Hub, Macie or Inspector applies to the whole account.
 - **Safe order.** Teardown goes: security services, then instances, databases and caches, then load balancers, NAT gateways, endpoints, VPNs and firewalls, then database clusters, then Elastic IPs, then AMIs, then volumes and snapshots, then keys, secrets, Private CAs and buckets. That way a NAT gateway is gone before its Elastic IP, and an AMI before its snapshots.
 - **Waits where it has to.** An Elastic IP held by a NAT gateway that's being deleted can't be released right away, so teardown retries for up to 6 minutes.
 - **Respects protection settings.** It won't turn off termination protection, deletion protection or delete protection. Those rows either can't be ticked or fail with a message telling you to turn it off yourself.
@@ -153,7 +155,8 @@ Two things to know before your first real teardown:
 - It only calls a service in regions where that service exists, so it doesn't waste time on endpoints that aren't there.
 - Each type in each region is one task, and 16 tasks run at once. A full scan of one account is a few hundred API calls, and with adaptive retries it slows down by itself if AWS starts throttling.
 - Credentials are read once per account and shared between the threads, so SSO profiles only read their token once.
-- Services that aren't available or need opt-in are skipped quietly. Access denied errors are grouped into one note per type, like "no permission to list EKS cluster (17 regions)", and the rest of the scan still counts.
+- Services that aren't offered in a region, or aren't turned on for the account, are skipped quietly. Access denied errors are grouped into one note per type, like "no permission to list EKS cluster (17 regions)", and the rest of the scan still counts.
+- Checks that couldn't run at all, because AWS couldn't be reached or turned the credentials away (which is also what happens in a region that isn't turned on), show as notes too, grouped the same way. That way a scan that couldn't look doesn't pass for a clean one.
 - S3 sizes come from CloudWatch's `BucketSizeBytes` metric for standard storage, which AWS updates once a day.
 - Month-to-date spend uses Cost Explorer's `GetCostAndUsage`, grouped by service, from the 1st of the month to today.
 

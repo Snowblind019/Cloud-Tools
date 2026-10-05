@@ -1,0 +1,18 @@
+{
+  "generator": "AWS Kit Cloud Map designer",
+  "design": "design-two-az-vpc.drawio",
+  "sha256": "af72e3f91a8beacebccee1c156607b3bad845863c376bb5690f37636043be00f",
+  "region": "us-west-2",
+  "files": {
+    "README.md": "e16a2510a4a582f08436b1a7fdf68c8d34af11da74851371bd849e1d6a407f0f",
+    "examples/basic/main.tf": "429c37816b220b9fa5edce250436e19161e000724400a4c33935a79933305166",
+    "examples/basic/outputs.tf": "8fffe94b3f161650c822cca749cd1c60142208e7ab14fb152309b2433cc4a445",
+    "examples/basic/terraform.tfvars": "55db104f035ff016610d544ac4aed8052a6d8ee413333bac0b0396877cd81d43",
+    "examples/basic/variables.tf": "5652aa27379de978c5cdcc309c97d0a6b93449b68523eb22f629a269f6c4ec7a",
+    "main.tf": "14ddefdc5f597c5f8ddc56b652d15a8ccb61b39477369567935986ab80be8ae3",
+    "outputs.tf": "fa1d4b008cd0b1d9d0df4583cbafa6f8726e245110d3ffe8b3ab9404482f41ca",
+    "security.tf": "2d568d88b79428714d14cf1814b177f8f6846fbdfe8288b5d79e19c9b3e64041",
+    "variables.tf": "b44c192a18bffcf59ff82332e99f2e23577e303a982c25c587458f08aec27601",
+    "versions.tf": "a16471490f487355af57c0720725182bb17c24f7e9ee6f5e56e1401ba6bab50b"
+  }
+}

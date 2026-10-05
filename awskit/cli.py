@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -15,7 +16,7 @@ from .common import (APP_ID, APP_NAME, IMAGE_APP_ID, PICKER_APP_ID, REDACT_APP_I
                      AuthError, ClipboardError, color, load_config, money, notify, parse_when,
                      pii_redact, table_text, to_markdown, write_clipboard)
 
-PAGES = ("redact", "image", "sweep", "audit", "trail", "plan", "policy", "profiles")
+PAGES = ("redact", "image", "sweep", "audit", "trail", "plan", "policy", "profiles", "map")
 
 
 def err(msg):
@@ -189,13 +190,22 @@ def sweep_notify(items, warnings, profiles) -> int:
         print("\n".join(warnings), file=sys.stderr)
         return 1
     print(sweep.summary_line(items))
+    if warnings:
+        print("\n".join(warnings), file=sys.stderr)
     if not live or (total < cfg.get("notify_threshold", 1.0) and not any(
             i.monthly is None for i in live)):
+        if warnings:
+            # Some checks didn't run, so "nothing found" may not be the whole story.
+            notify("Lab sweep: some checks couldn't run", "\n".join(warnings[:3]),
+                   icon="dialog-warning")
+            return 1
         return 0
     top = sorted(live, key=lambda i: -(i.monthly or 0))[:5]
     lines = [f"{i.kind_label} in {i.region} ({money(i.monthly)}/mo)" for i in top]
     if len(live) > 5:
         lines.append(f"and {len(live) - 5} more")
+    if warnings:
+        lines.append(f"{len(warnings)} check(s) couldn't run")
     notify(f"Still running: about {money(total)}/month", "\n".join(lines), urgent=total >= 20,
            icon="dialog-warning")
     topic = cfg.get("sns_topic")
@@ -263,6 +273,10 @@ def _install_windows_task(at, args) -> int:
         err("The daily check needs AWS Kit installed with install-windows.cmd.")
         return 1
     pythonw, script = launcher
+    bad = [p for p in args.profile or [] if not PROFILE_NAME.fullmatch(p)]
+    if bad:
+        err(f"{bad[0]} isn't a profile name AWS Kit can schedule (letters, digits and . _ - @ + = , / only).")
+        return 1
     arguments = f'"{script}" sweep --notify --quiet'
     for p in args.profile or []:
         arguments += f' --profile "{p}"'
@@ -270,7 +284,7 @@ def _install_windows_task(at, args) -> int:
     try:
         with os.fdopen(fd, "w", encoding="utf-16") as fh:
             fh.write(windows_task_xml(pythonw, arguments, at))
-        r = subprocess.run(["schtasks", "/Create", "/F", "/TN", WINDOWS_TASK, "/XML", path],
+        r = subprocess.run([system32("schtasks.exe"), "/Create", "/F", "/TN", WINDOWS_TASK, "/XML", path],
                            capture_output=True, text=True,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except OSError as exc:
@@ -292,7 +306,7 @@ def _install_windows_task(at, args) -> int:
 
 def _remove_windows_task() -> int:
     try:
-        r = subprocess.run(["schtasks", "/Delete", "/F", "/TN", WINDOWS_TASK],
+        r = subprocess.run([system32("schtasks.exe"), "/Delete", "/F", "/TN", WINDOWS_TASK],
                            capture_output=True, text=True,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except OSError as exc:
@@ -302,12 +316,29 @@ def _remove_windows_task() -> int:
     return 0
 
 
+# Profile names a scheduled sweep takes, so nothing in one can change the command line.
+PROFILE_NAME = re.compile(r"[\w.@+=,/-]+")
+
+
+def systemd_quote(word: str) -> str:
+    """One argument for a systemd ExecStart line: quoted, with % and $ doubled so systemd
+    doesn't expand them."""
+    word = str(word).replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + word.replace("%", "%%").replace("$", "$$") + '"'
+
+
+def system32(name: str) -> str:
+    """A program in Windows' System32 by its full path, so a file of the same name in the
+    current folder is never run instead."""
+    root = os.environ.get("SystemRoot") or os.environ.get("windir") or r"C:\Windows"
+    return os.path.join(root, "System32", name)
+
+
 def systemd_dir() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user"
 
 
 def install_timer(at, args) -> int:
-    import re
     if not re.fullmatch(r"\d{1,2}:\d{2}", at or ""):
         err("Give a time like 21:00.")
         return 1
@@ -316,12 +347,16 @@ def install_timer(at, args) -> int:
     exe = shutil.which("awskit") or str(Path.home() / ".local" / "bin" / "awskit")
     unit_dir = systemd_dir()
     unit_dir.mkdir(parents=True, exist_ok=True)
-    profile_args = ""
-    if args.profile:
-        profile_args = " " + " ".join(f"--profile {p}" for p in args.profile)
+    bad = [p for p in args.profile or [] if not PROFILE_NAME.fullmatch(p)]
+    if bad:
+        err(f"{bad[0]} isn't a profile name AWS Kit can schedule (letters, digits and . _ - @ + = , / only).")
+        return 1
+    words = [exe, "sweep", "--notify", "--quiet"]
+    for p in args.profile or []:
+        words += ["--profile", p]
     (unit_dir / "awskit-sweep.service").write_text(
         "[Unit]\nDescription=AWS Kit lab sweep\n\n[Service]\nType=oneshot\n"
-        f"ExecStart={exe} sweep --notify --quiet{profile_args}\n", encoding="utf-8")
+        f"ExecStart={' '.join(systemd_quote(w) for w in words)}\n", encoding="utf-8")
     hh, mm = at.split(":")
     (unit_dir / "awskit-sweep.timer").write_text(
         "[Unit]\nDescription=Run the AWS Kit lab sweep every day\n\n[Timer]\n"
@@ -467,6 +502,9 @@ def cmd_plan(args) -> int:
         summary = tfplan.summarize(plan)
     except tfplan.PlanError as exc:
         err(str(exc))
+        return 1
+    except (ValueError, TypeError, AttributeError, KeyError, RecursionError) as exc:
+        err(f"That plan couldn't be read: {type(exc).__name__} {exc}")
         return 1
     if args.json:
         print(json.dumps({"headline": summary.headline(), "counts": summary.counts(),
@@ -627,17 +665,17 @@ def desktop_entries(exe: str) -> dict:
         "[Desktop Entry]\nType=Application\n"
         f"Name={APP_NAME}\nGenericName=AWS and Terraform tools\n"
         "Comment=Redact output and screenshots, lab sweep, exposure audit, CloudTrail, plan and "
-        "policy checks\n"
+        "policy checks, cloud maps\n"
         f"Exec=\"{exe}\" gui\nIcon=network-server\nTerminal=false\n"
         "Categories=Development;Utility;\n"
         "Keywords=aws;terraform;iam;cloudtrail;security;cost;redact;\n"
         f"StartupNotify=true\nStartupWMClass={APP_ID}\n"
-        "Actions=image;sweep;audit;trail;plan;policy;\n"
+        "Actions=image;sweep;audit;trail;plan;policy;map;\n"
     )
     for page, title in (("image", "Image Redact"), ("sweep", "Lab Sweep"),
                         ("audit", "Exposure Audit"),
                         ("trail", "CloudTrail"), ("plan", "Plan Check"),
-                        ("policy", "Policy Check")):
+                        ("policy", "Policy Check"), ("map", "Cloud Map")):
         main += f"\n[Desktop Action {page}]\nName={title}\nExec=\"{exe}\" gui {page}\n"
     picker = (
         "[Desktop Entry]\nType=Application\nName=AWS Profile Picker\n"
@@ -681,10 +719,111 @@ def desktop_entries(exe: str) -> dict:
 
 
 def launcher_script(module_args: str, comment: str) -> str:
+    """The awskit command. It doesn't use python3 -m awskit, which would look for Python
+    modules in whatever folder you run it from first (a cloned repo's json.py, say)."""
+    import shlex
+    start = ('import os, sys; sys.path[0] = os.environ.pop("AWSKIT_HOME"); '
+             'from awskit.cli import main; sys.exit(main())')
     return ("#!/bin/sh\n"
             f"# {comment}, written by awskit install\n"
-            f"PYTHONPATH=\"{share_dir()}${{PYTHONPATH:+:$PYTHONPATH}}\" "
-            f"exec python3 -m awskit {module_args}\"$@\"\n")
+            f"AWSKIT_HOME={shlex.quote(str(share_dir()))} "
+            f"exec python3 -c {shlex.quote(start)} {module_args}\"$@\"\n")
+
+
+DRAWIO_SKIP = ("WEB-INF/", "META-INF/")
+
+
+def unpack_drawio(war: str, dest: Path, version: str):
+    """Unpack draw.io's web app (a .war is a zip) into dest, replacing what's there. The
+    Java server parts and source maps are left out. Writes the version marker last, so a
+    half-finished unpack is never taken for a good one."""
+    import zipfile
+    from .common import DRAWIO_MARKER
+    # AWSKIT_DRAWIO can point anywhere, so only a folder AWS Kit unpacked before (it has
+    # the marker), an empty one or none at all is replaced.
+    if dest.is_symlink() or (dest.exists() and not (dest / DRAWIO_MARKER).exists()
+                             and (not dest.is_dir() or any(dest.iterdir()))):
+        raise ValueError(f"{dest} has files AWS Kit didn't put there, so it's left alone. "
+                         "Point AWSKIT_DRAWIO at an empty folder, or remove it.")
+    tmp = dest.with_name(dest.name + ".new")
+    if tmp.is_symlink():
+        tmp.unlink()
+    elif tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
+    root = tmp.resolve()
+    with zipfile.ZipFile(war) as zf:
+        if "index.html" not in zf.namelist():
+            raise ValueError("That file isn't draw.io's web app (no index.html in it).")
+        for info in zf.infolist():
+            name = info.filename.replace("\\", "/")
+            if info.is_dir() or name.startswith(DRAWIO_SKIP) or name.endswith(".map"):
+                continue
+            target = (tmp / name).resolve()
+            if root not in target.parents:
+                raise ValueError(f"Unsafe path in the zip: {name}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out, 1 << 20)
+    (tmp / DRAWIO_MARKER).write_text(version + "\n", encoding="ascii")
+    if dest.exists():
+        shutil.rmtree(dest)
+    tmp.replace(dest)
+
+
+def sha256_of(path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def install_drawio(zip_path=None, dest=None) -> bool:
+    """Download (or take from zip_path) the pinned draw.io web app, check its SHA-256 and
+    unpack it. Only does the work when the pinned version changes. Cloud Map uses it for
+    its AWS icons and its offline editor. Returns False if it couldn't, which isn't fatal."""
+    import tempfile
+    import urllib.request
+    from .common import (DRAWIO_SHA256, DRAWIO_URL, DRAWIO_VERSION, drawio_dir,
+                         drawio_installed)
+    dest = Path(dest) if dest else drawio_dir()
+    if not zip_path and drawio_installed(dest) == DRAWIO_VERSION:
+        print(f"draw.io {DRAWIO_VERSION} is already in {dest}")
+        return True
+    tmp_dir = None
+    try:
+        if zip_path:
+            war = str(Path(zip_path).expanduser())
+        else:
+            tmp_dir = tempfile.mkdtemp(prefix="awskit-drawio-")
+            war = os.path.join(tmp_dir, "draw.war")
+            print(f"Downloading draw.io {DRAWIO_VERSION} (about 48 MB) for Cloud Map's icons "
+                  "and editor...")
+            req = urllib.request.Request(DRAWIO_URL, headers={"User-Agent": f"awskit/{VERSION}"})
+            with urllib.request.urlopen(req, timeout=60) as resp, open(war, "wb") as out:
+                shutil.copyfileobj(resp, out, 1 << 20)
+        got = sha256_of(war)
+        if got != DRAWIO_SHA256:
+            err(f"That draw.io download doesn't match the pinned version {DRAWIO_VERSION}.\n"
+                f"  expected SHA-256 {DRAWIO_SHA256}\n  got      {got}\n"
+                "Nothing was changed. Download draw.war from the link below and try again.")
+            print(f"  {DRAWIO_URL}", file=sys.stderr)
+            return False
+        unpack_drawio(war, dest, DRAWIO_VERSION)
+        print(f"Unpacked draw.io {DRAWIO_VERSION} into {dest}")
+        return True
+    except (OSError, ValueError) as exc:
+        err(f"Couldn't set up draw.io: {exc}")
+        print("Cloud Map still draws maps, with simple stand-in icons, but can't open its "
+              "editor. On a network that blocks "
+              f"GitHub, download\n  {DRAWIO_URL}\nanother way, then run:\n"
+              "  ./install.sh --drawio-zip /path/to/draw.war", file=sys.stderr)
+        return False
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def cmd_install(args) -> int:
@@ -711,6 +850,8 @@ def cmd_install(args) -> int:
     bin_dir = Path.home() / ".local" / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     exe = bin_dir / "awskit"
+    if exe.exists() or exe.is_symlink():
+        exe.unlink()             # a link (pipx, a dev setup) is replaced, not written through
     exe.write_text(launcher_script("", "AWS Kit launcher"), encoding="utf-8")
     exe.chmod(0o755)
     # pii-redact keeps working as its own command, so old keybinds and habits still work.
@@ -732,6 +873,8 @@ def cmd_install(args) -> int:
     print(f"Installed {exe} and {shortcut}")
     print(f"Launcher entries added to {apps}: AWS Kit, AWS Profile Picker, PII Redact, "
           "PII Redact Settings, Image Redact")
+    if not getattr(args, "no_drawio", False):
+        install_drawio(getattr(args, "drawio_zip", None))
     if old:
         print("Removed launcher entries from the old standalone PII Redact. Your PII Redact "
               "settings carry over.")
@@ -755,9 +898,19 @@ def cmd_uninstall(args) -> int:
         if path.exists():
             path.unlink()
             removed.append(str(path))
-    if share_dir().exists():
-        shutil.rmtree(share_dir())
-        removed.append(str(share_dir()))
+    share = share_dir()
+    repo = Path(__file__).resolve().parent.parent
+    if share.exists() and (share.resolve() == repo or (share / ".git").exists()):
+        # AWS Kit runs straight from this folder (a clone), so only what install added goes.
+        from .common import DRAWIO_MARKER
+        drawio = share / "drawio"
+        if (drawio / DRAWIO_MARKER).exists() and not drawio.is_symlink():
+            shutil.rmtree(drawio)
+            removed.append(str(drawio))
+        print(f"Kept {share}, since it's a copy of the code you run AWS Kit from.")
+    elif share.exists():
+        shutil.rmtree(share)
+        removed.append(str(share))
     remove_timer()
     print("Removed:\n  " + "\n  ".join(removed) if removed else "Nothing to remove.")
     from .common import CONFIG_DIR
@@ -800,6 +953,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Redact account IDs, keys and other identifying info (same as pii-redact)")
     sub.add_parser("image", add_help=False,
                    help="Cover account IDs, keys and other identifying text in screenshots")
+    sub.add_parser("map", add_help=False,
+                   help="Draw access and network maps of AWS or Terraform as draw.io diagrams")
 
     g = sub.add_parser("gui", help="Open the window")
     g.add_argument("page", nargs="?", choices=PAGES, help="Page to open on")
@@ -899,6 +1054,11 @@ def build_parser() -> argparse.ArgumentParser:
     sh.set_defaults(func=cmd_shell_init)
 
     i = sub.add_parser("install", help="Install to ~/.local and add launcher entries")
+    i.add_argument("--drawio-zip", metavar="PATH",
+                   help="Use a draw.war you already downloaded, for networks that block GitHub")
+    i.add_argument("--no-drawio", action="store_true",
+                   help="Skip the draw.io download (Cloud Map then uses stand-in icons and has "
+                        "no editor)")
     i.set_defaults(func=cmd_install)
     u = sub.add_parser("uninstall", help="Remove awskit")
     u.set_defaults(func=cmd_uninstall)
@@ -916,6 +1076,10 @@ def main(argv=None) -> int:
     if argv[0] == "image":
         from .imageredact import main as image_main
         return image_main(argv[1:], prog="awskit image")
+    if argv[0] == "map":
+        # Cloud Map has subcommands of its own (scan, tf, export).
+        from .cloudmap import main as map_main
+        return map_main(argv[1:], prog="awskit map")
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "func", None):

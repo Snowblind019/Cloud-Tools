@@ -18,6 +18,7 @@ Tools like Prowler and Security Hub run hundreds of checks, which is great, but 
 | | Inbound from the internet on a risky port (see below) or a range of 1,000 ports or more | high |
 | | Inbound from the internet on any other port | medium |
 | | Inbound from the internet on just port 80 or 443 | info |
+| | Inbound from a public range of /8 or wider (/16 for IPv6) that isn't the whole internet, like `3.0.0.0/8` | one step lower than the same rule open to everyone |
 | | Any of the above on a group that isn't attached to anything right now | one step lower (critical and high become medium, medium becomes low) |
 | | A default security group that's in use and still has inbound rules | low |
 | **EC2** | Instance allows IMDSv1 and has a public IP | high |
@@ -30,11 +31,11 @@ Tools like Prowler and Security Hub run hundreds of checks, which is great, but 
 | **S3** | Bucket policy makes the bucket public | critical |
 | | Bucket ACL grants everyone or any AWS account | high, or low if the bucket's public access block overrides it |
 | | No account-level Block Public Access, or some of it turned off | medium |
-| **RDS** | Manual snapshot anyone can restore | critical |
+| **RDS** | Manual snapshot anyone can restore, database or Aurora cluster | critical |
 | | Database is publicly accessible | high |
 | | Database storage isn't encrypted | medium |
 | **Lambda** | Function URL with no auth | high |
-| | Function policy lets anyone invoke it, with no narrowing condition | high |
+| | Function policy lets anyone invoke it: no condition, a condition that doesn't narrow who (like `StringNotEquals`), or `NotPrincipal` | high |
 | **IAM** | Root user has access keys | critical |
 | | Root user has no MFA | high |
 | | Console user without MFA | high |
@@ -113,7 +114,7 @@ Check names for `-c`:
 
 - Regional checks run in every enabled region (or the ones in your settings). S3, IAM and CloudTrail are account-wide and run once per account.
 - Up to 12 checks run at once.
-- **Security groups:** it reads every network interface first to learn which groups are actually attached to something, then grades each open rule.
+- **Security groups:** it reads every network interface first to learn which groups are actually attached to something, then grades each open rule. Ranges in one rule that add up to the whole internet, like `0.0.0.0/1` plus `128.0.0.0/1`, count as open to the internet. Private ranges like `10.0.0.0/8` don't count as broad.
 - **Snapshots:** it asks EC2 for your snapshots that are restorable by `all`, which is one call per region instead of one per snapshot.
 - **S3:** it checks the account's Block Public Access, then for each bucket its own Block Public Access, AWS's own "is this policy public" verdict (`GetBucketPolicyStatus`), and its ACL. Each bucket is checked in its own region.
 - **Lambda policies:** they're graded with the same rules as [Policy Check](../policy-check/).
@@ -142,6 +143,7 @@ The AWS managed `SecurityAudit` policy covers all of it. The exact actions:
         "s3:GetAccountPublicAccessBlock", "s3:ListAllMyBuckets", "s3:GetBucketLocation",
         "s3:GetBucketPublicAccessBlock", "s3:GetBucketPolicyStatus", "s3:GetBucketAcl",
         "rds:DescribeDBInstances", "rds:DescribeDBSnapshots", "rds:DescribeDBSnapshotAttributes",
+        "rds:DescribeDBClusterSnapshots", "rds:DescribeDBClusterSnapshotAttributes",
         "lambda:ListFunctions", "lambda:ListFunctionUrlConfigs", "lambda:GetPolicy",
         "iam:GetAccountSummary", "iam:GetAccountPasswordPolicy",
         "iam:GenerateCredentialReport", "iam:GetCredentialReport",
@@ -156,16 +158,19 @@ The AWS managed `SecurityAudit` policy covers all of it. The exact actions:
 
 </details>
 
-If a role is missing some of these, the audit still runs the rest and lists what it couldn't check, like "no permission for Public Lambda functions (17 regions)".
+If a role is missing some of these, the audit still runs the rest and lists what it couldn't check, like "no permission for Public Lambda functions (17 regions)". Smaller gaps show up as info findings, so they don't look like a clean result: no permission for the account's S3 Block Public Access, for function URLs or policies, or for Aurora snapshots. Regions it couldn't reach, or where AWS didn't accept the credentials, are listed in the notes too.
+
+`iam:GenerateCredentialReport` is the one call that isn't a describe, list or get. It only asks IAM to build the credential report so it can be read, and changes nothing.
 
 ## Using it in CI
 
-`--fail-on` makes it easy to run on a schedule, for example in a GitHub Actions workflow with an OIDC role that has `SecurityAudit`:
+`--fail-on` makes it easy to run on a schedule, for example in a GitHub Actions workflow with an OIDC role that has `SecurityAudit`. The job runs with AWS credentials, so pin the exact commit you've looked at (put its full SHA in place of `COMMIT_SHA`) rather than whatever the default branch holds that day:
 
 ```yaml
 - name: Exposure audit
   run: |
-    git clone --depth 1 https://github.com/Snowblind019/cloud-tools.git /tmp/cloud-tools
+    git clone --filter=blob:none https://github.com/Snowblind019/cloud-tools.git /tmp/cloud-tools
+    git -C /tmp/cloud-tools checkout --quiet COMMIT_SHA
     pip install boto3
     PYTHONPATH=/tmp/cloud-tools python3 -m awskit audit --markdown audit.md --fail-on high || status=$?
     cat audit.md >> "$GITHUB_STEP_SUMMARY"

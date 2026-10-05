@@ -1,7 +1,13 @@
 """Lab Sweep: finds things still costing money in lab accounts, and tears them down.
 
-Scan is read-only. Teardown only touches what you select, never anything kept by
-the keep list or the keep tag, and asks you to type "delete" first.
+Scan is read-only. Teardown only touches what you select, and asks you to type
+"delete" first. Right before each delete it reads the keep list and keep tag again,
+and checks the profile still points at the account the item was found in.
+
+The keep tag only works for types whose listing comes back with tags: EC2 instances,
+NAT gateways, Elastic IPs, EBS volumes and snapshots, AMIs, VPC endpoints, VPNs,
+transit gateway attachments, Client VPN, Network Firewall, RDS, Secrets Manager,
+CloudHSM and GuardDuty. Anything else needs the keep list.
 
 Prices are rough us-east-1 on-demand numbers so you can tell a $3 leftover from a
 $300 one. They are not a bill. Use "spend" for what Cost Explorer actually shows.
@@ -410,7 +416,7 @@ def scan_nfw(ctx, region):
         out.append(Item("network_firewall", f["FirewallArn"], f.get("FirewallName", ""), status,
                         f"{endpoints} endpoint(s)", 0.395 * H * endpoints,
                         note="Plus $0.065 per GB." + (" Delete protection is on." if fw.get("DeleteProtection") else ""),
-                        can_delete=not fw.get("DeleteProtection")))
+                        can_delete=not fw.get("DeleteProtection"), tags=tags_dict(fw.get("Tags"))))
     return out
 
 
@@ -531,13 +537,15 @@ def scan_rds_snapshots(ctx, region):
         size = s.get("AllocatedStorage", 0)
         out.append(Item("rds_snapshot", s["DBSnapshotIdentifier"], s.get("DBInstanceIdentifier", ""),
                         s.get("Status", ""), f"{size} GB {s.get('Engine', '')}", 0.095 * size,
-                        s.get("SnapshotCreateTime"), extra={"cluster": False}))
+                        s.get("SnapshotCreateTime"), extra={"cluster": False},
+                        tags=tags_dict(s.get("TagList"))))
     for s in paginate(rds, "describe_db_cluster_snapshots", "DBClusterSnapshots", SnapshotType="manual"):
         size = s.get("AllocatedStorage", 0)
         out.append(Item("rds_snapshot", s["DBClusterSnapshotIdentifier"],
                         s.get("DBClusterIdentifier", ""), s.get("Status", ""),
                         f"{size} GB {s.get('Engine', '')} cluster", 0.021 * size,
-                        s.get("SnapshotCreateTime"), extra={"cluster": True}))
+                        s.get("SnapshotCreateTime"), extra={"cluster": True},
+                        tags=tags_dict(s.get("TagList"))))
     return out
 
 
@@ -743,7 +751,8 @@ def scan_hsm(ctx, region):
             continue
         n = len(c.get("Hsms") or [])
         out.append(Item("cloudhsm", c["ClusterId"], "", c.get("State", "").lower(), f"{n} HSM(s)",
-                        1.45 * H * n, c.get("CreateTimestamp"), can_delete=False))
+                        1.45 * H * n, c.get("CreateTimestamp"), can_delete=False,
+                        tags=tags_dict(c.get("TagList"))))
     return out
 
 
@@ -763,7 +772,8 @@ def scan_guardduty(ctx, region):
         if d.get("Status") == "ENABLED":
             out.append(Item("guardduty", det, "", "enabled", "Detector on", None,
                             _dt(d.get("CreatedAt")),
-                            note="Billed by events and data analyzed. Free for the first 30 days."))
+                            note="Billed by events and data analyzed. Free for the first 30 days.",
+                            tags=dict(d.get("Tags") or {})))
     return out
 
 
@@ -933,11 +943,30 @@ def kind_choices() -> list:
     return sorted(KINDS)
 
 
-def _apply_keep(item, cfg):
+def is_kept(item, cfg) -> bool:
+    """True if the keep list names the item, or it has the keep tag. The tag can only
+    match types whose scan reads tags (see the note at the top)."""
     keep = set(cfg.get("keep") or [])
     tag = cfg.get("keep_tag") or ""
-    if item.id in keep or item.name in keep or (tag and tag in item.tags):
-        item.kept = True
+    return item.id in keep or item.name in keep or bool(tag and tag in item.tags)
+
+
+def apply_keep(items, cfg=None):
+    """Mark items kept or not from the keep list and keep tag as they are now."""
+    cfg = load_config() if cfg is None else cfg
+    for it in items:
+        it.kept = is_kept(it, cfg)
+
+
+# Errors that mean the service isn't offered there or isn't turned on for the account,
+# so nothing of that type can be running.
+NOT_OFFERED_NAMES = ("UnknownEndpoint", "UnknownEndpointError")
+NOT_OFFERED_CODES = ("OptInRequired", "SubscriptionRequiredException")
+# Errors that mean the check never ran: no connection, or AWS turned the credentials
+# away (which is also what a region that isn't turned on does). These become warnings,
+# so a scan that couldn't look doesn't pass for a clean one.
+UNREACHABLE_NAMES = ("EndpointConnectionError",)
+UNREACHABLE_CODES = ("UnrecognizedClientException", "InvalidClientTokenId", "AuthFailure")
 
 
 def scan(profiles, regions=None, kinds=None, progress=None, cancel=None, workers=16):
@@ -950,6 +979,7 @@ def scan(profiles, regions=None, kinds=None, progress=None, cancel=None, workers
     wanted = [KINDS[k] for k in (kinds or KINDS) if k in KINDS]
     items, warnings = [], []
     denied = {}
+    unreachable = {}
 
     contexts = []
     for p in profiles:
@@ -989,13 +1019,16 @@ def scan(profiles, regions=None, kinds=None, progress=None, cancel=None, workers
             if progress:
                 progress(done, total, f"{k.label} in {region}")
             if exc is not None:
-                name = type(exc).__name__
-                if name in ("EndpointConnectionError", "UnknownEndpoint") or error_code(exc) in (
-                        "OptInRequired", "SubscriptionRequiredException", "UnrecognizedClientException",
-                        "InvalidClientTokenId", "AuthFailure"):
-                    continue  # service not offered or not opted in there
+                name, code = type(exc).__name__, error_code(exc)
+                if name in NOT_OFFERED_NAMES or code in NOT_OFFERED_CODES:
+                    continue  # service not offered or not turned on there
                 if is_access_denied(exc):
                     denied.setdefault((ctx.label, k.label), []).append(region)
+                elif name in UNREACHABLE_NAMES or code in UNREACHABLE_CODES:
+                    _, kinds_hit, regs = unreachable.setdefault(
+                        (ctx.label, code or name), (error_text(exc, ctx.profile), set(), set()))
+                    kinds_hit.add(k.label)
+                    regs.add(region)
                 else:
                     warnings.append(f"{ctx.label}: {k.label} in {region}: {error_text(exc, ctx.profile)}")
                 continue
@@ -1010,9 +1043,16 @@ def scan(profiles, regions=None, kinds=None, progress=None, cancel=None, workers
                         it.note = KINDS[it.kind].manual_note
                     elif KINDS[it.kind].manual_note:
                         it.note += " " + KINDS[it.kind].manual_note
-                _apply_keep(it, cfg)
+                it.kept = is_kept(it, cfg)
                 items.append(it)
 
+    for (label, code), (reason, kinds_hit, regs) in sorted(unreachable.items()):
+        what = next(iter(kinds_hit)) if len(kinds_hit) == 1 else f"{len(kinds_hit)} types"
+        where = ", ".join(sorted(regs)) if len(regs) <= 3 else f"{len(regs)} regions"
+        text = f"{label}: couldn't check {what} in {where}. {reason}"
+        if code in UNREACHABLE_CODES:
+            text += " If a region isn't turned on for this account, take it out of the region list."
+        warnings.append(text)
     for (label, kind_label), regs in sorted(denied.items()):
         where = regs[0] if len(regs) == 1 else f"{len(regs)} regions"
         warnings.append(f"{label}: no permission to list {kind_label} ({where})")
@@ -1035,8 +1075,25 @@ def summary_line(items) -> str:
     return text + "."
 
 
+def account_problem(ctx, item) -> str:
+    """Why item can't be deleted through ctx, or "" when ctx is still the account it was
+    found in. Deletes go by name or ID, and some turn a service off for the whole account,
+    so a profile pointed at another account since the scan would hit that account."""
+    who = item.profile or "default"
+    if not item.account:
+        return f"Skipped, no account was recorded for it when profile {who} was scanned. Scan again."
+    now = ctx.account
+    if now != item.account:
+        return f"Skipped, profile {who} now points at account {now}, not {item.account}. Scan again."
+    return ""
+
+
 def teardown(items, dry_run=False, progress=None, cancel=None):
-    """Delete items in a safe order. Returns a list of (item, ok, message)."""
+    """Delete items in a safe order. Returns a list of (item, ok, message).
+
+    Right before each item it reads the keep list and keep tag again, and checks the
+    item's profile still points at the account the scan found it in.
+    """
     results = []
     contexts = {}
     todo = sorted(items, key=lambda i: (KINDS[i.kind].order, i.region, i.id))
@@ -1045,6 +1102,8 @@ def teardown(items, dry_run=False, progress=None, cancel=None):
             results.append((it, False, "Skipped, stopped by you"))
             continue
         k = KINDS[it.kind]
+        if is_kept(it, load_config()):
+            it.kept = True  # added to the keep list, or the keep tag changed, since the scan
         if it.kept:
             results.append((it, False, "Kept (keep list or keep tag)"))
         elif not it.can_delete or k.delete is None:
@@ -1056,7 +1115,11 @@ def teardown(items, dry_run=False, progress=None, cancel=None):
                 ctx = contexts.get(it.profile)
                 if ctx is None:
                     ctx = contexts[it.profile] = AwsContext(it.profile or None)
-                results.append((it, True, k.delete(ctx, it) or "Done"))
+                problem = account_problem(ctx, it)
+                if problem:
+                    results.append((it, False, problem))
+                else:
+                    results.append((it, True, k.delete(ctx, it) or "Done"))
             except Exception as exc:  # noqa: BLE001
                 results.append((it, False, error_text(exc, it.profile) if not isinstance(
                     exc, RuntimeError) else str(exc)))

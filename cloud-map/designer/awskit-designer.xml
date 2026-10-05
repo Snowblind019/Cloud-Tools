@@ -1,0 +1,56 @@
+<mxlibrary title="AWS Kit Designer">[
+ {
+  "xml": "&lt;mxGraphModel&gt;&lt;root&gt;&lt;mxCell id=\"0\"/&gt;&lt;mxCell id=\"1\" parent=\"0\"/&gt;&lt;UserObject label='&amp;lt;b&amp;gt;%name%&amp;lt;/b&amp;gt;&amp;lt;br&amp;gt;&amp;lt;span style=\"font-size:11px;color:#B4B2A9;font-weight:normal\"&amp;gt;%cidr%&amp;lt;/span&amp;gt;' placeholders=\"1\" awskit_type=\"vpc\" cidr=\"10.0.0.0/16\" dns_hostnames=\"true\" name=\"main\" id=\"2\"&gt;&lt;mxCell style=\"shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc2;grIconSize=24;grStroke=1;strokeColor=#8C4FFF;fillColor=#1E1B29;dashed=0;strokeWidth=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=14;fontColor=#E2D6FF;align=left;verticalAlign=top;spacing=0;spacingLeft=34;spacingTop=6;spacingRight=14;spacingBottom=0;container=1;collapsible=0;recursiveResize=0;pointerEvents=0;\" vertex=\"1\" parent=\"1\"&gt;&lt;mxGeometry x=\"0\" y=\"0\" width=\"400\" height=\"240\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;/root&gt;&lt;/mxGraphModel&gt;",
+  "w": 400,
+  "h": 240,
+  "title": "VPC"
+ },
+ {
+  "xml": "&lt;mxGraphModel&gt;&lt;root&gt;&lt;mxCell id=\"0\"/&gt;&lt;mxCell id=\"1\" parent=\"0\"/&gt;&lt;UserObject label='&amp;lt;b&amp;gt;%name%&amp;lt;/b&amp;gt;&amp;lt;br&amp;gt;&amp;lt;span style=\"font-size:11px;color:#A8B98A;font-weight:normal\"&amp;gt;%cidr%, %type%, zone %az%&amp;lt;/span&amp;gt;' placeholders=\"1\" awskit_type=\"subnet\" az=\"a\" cidr=\"10.0.1.0/24\" name=\"public-a\" type=\"public\" id=\"2\"&gt;&lt;mxCell style=\"shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;grIconSize=24;grStroke=1;strokeColor=#7AA116;fillColor=#1B2414;dashed=0;strokeWidth=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=14;fontColor=#D7E8B5;align=left;verticalAlign=top;spacing=0;spacingLeft=34;spacingTop=6;spacingRight=14;spacingBottom=0;container=1;collapsible=0;recursiveResize=0;pointerEvents=0;\" vertex=\"1\" parent=\"1\"&gt;&lt;mxGeometry x=\"0\" y=\"0\" width=\"320\" height=\"160\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;/root&gt;&lt;/mxGraphModel&gt;",
+  "w": 320,
+  "h": 160,
+  "title": "Public subnet"
+ },
+ {
+  "xml": "&lt;mxGraphModel&gt;&lt;root&gt;&lt;mxCell id=\"0\"/&gt;&lt;mxCell id=\"1\" parent=\"0\"/&gt;&lt;UserObject label='&amp;lt;b&amp;gt;%name%&amp;lt;/b&amp;gt;&amp;lt;br&amp;gt;&amp;lt;span style=\"font-size:11px;color:#8BB7B8;font-weight:normal\"&amp;gt;%cidr%, %type%, zone %az%&amp;lt;/span&amp;gt;' placeholders=\"1\" awskit_type=\"subnet\" az=\"a\" cidr=\"10.0.11.0/24\" name=\"private-a\" type=\"private\" id=\"2\"&gt;&lt;mxCell style=\"shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;grIconSize=24;grStroke=1;strokeColor=#00A4A6;fillColor=#122326;dashed=0;strokeWidth=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=14;fontColor=#B5E3E4;align=left;verticalAlign=top;spacing=0;spacingLeft=34;spacingTop=6;spacingRight=14;spacingBottom=0;container=1;collapsible=0;recursiveResize=0;pointerEvents=0;\" vertex=\"1\" parent=\"1\"&gt;&lt;mxGeometry x=\"0\" y=\"0\" width=\"320\" height=\"160\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;/root&gt;&lt;/mxGraphModel&gt;",
+  "w": 320,
+  "h": 160,
+  "title": "Private subnet"
+ },
+ {
+  "xml": "&lt;mxGraphModel&gt;&lt;root&gt;&lt;mxCell id=\"0\"/&gt;&lt;mxCell id=\"1\" parent=\"0\"/&gt;&lt;UserObject label=\"&amp;lt;b&amp;gt;%name%&amp;lt;/b&amp;gt;\" placeholders=\"1\" awskit_type=\"igw\" name=\"igw\" id=\"2\"&gt;&lt;mxCell style=\"rounded=1;arcSize=8;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=12;fontColor=#F1EFE8;align=left;verticalAlign=middle;spacing=0;spacingLeft=40;spacingTop=0;spacingRight=8;spacingBottom=0;\" vertex=\"1\" parent=\"1\"&gt;&lt;mxGeometry x=\"0\" y=\"0\" width=\"180\" height=\"40\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;UserObject label=\"\" placeholders=\"1\" awskit_part=\"icon\" id=\"2-icon\"&gt;&lt;mxCell style=\"shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.internet_gateway;fillColor=#8C4FFF;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;\" vertex=\"1\" parent=\"2\"&gt;&lt;mxGeometry x=\"8\" y=\"8\" width=\"24\" height=\"24\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;/root&gt;&lt;/mxGraphModel&gt;",
+  "w": 180,
+  "h": 40,
+  "title": "Internet gateway"
+ },
+ {
+  "xml": "&lt;mxGraphModel&gt;&lt;root&gt;&lt;mxCell id=\"0\"/&gt;&lt;mxCell id=\"1\" parent=\"0\"/&gt;&lt;UserObject label='&amp;lt;b&amp;gt;%name%&amp;lt;/b&amp;gt;&amp;lt;br&amp;gt;&amp;lt;span style=\"font-size:11px;color:#B4B2A9;font-weight:normal\"&amp;gt;NAT gateway, %mode%&amp;lt;/span&amp;gt;' placeholders=\"1\" awskit_type=\"nat\" mode=\"per-az\" name=\"nat-a\" id=\"2\"&gt;&lt;mxCell style=\"rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=middle;spacing=0;spacingLeft=56;spacingTop=0;spacingRight=12;spacingBottom=0;\" vertex=\"1\" parent=\"1\"&gt;&lt;mxGeometry x=\"0\" y=\"0\" width=\"260\" height=\"60\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;UserObject label=\"\" placeholders=\"1\" awskit_part=\"icon\" id=\"2-icon\"&gt;&lt;mxCell style=\"shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.nat_gateway;fillColor=#8C4FFF;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;\" vertex=\"1\" parent=\"2\"&gt;&lt;mxGeometry x=\"12\" y=\"14\" width=\"32\" height=\"32\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;/root&gt;&lt;/mxGraphModel&gt;",
+  "w": 260,
+  "h": 60,
+  "title": "NAT gateway"
+ },
+ {
+  "xml": "&lt;mxGraphModel&gt;&lt;root&gt;&lt;mxCell id=\"0\"/&gt;&lt;mxCell id=\"1\" parent=\"0\"/&gt;&lt;UserObject label='&amp;lt;b&amp;gt;%name%&amp;lt;/b&amp;gt;&amp;lt;br&amp;gt;&amp;lt;span style=\"font-size:11px;color:#B4B2A9;font-weight:normal\"&amp;gt;%description%&amp;lt;/span&amp;gt;' placeholders=\"1\" awskit_type=\"sg\" description=\"Web servers\" egress=\"all 0.0.0.0/0\" ingress=\"tcp 443 0.0.0.0/0\" name=\"web\" id=\"2\"&gt;&lt;mxCell style=\"rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=middle;spacing=0;spacingLeft=56;spacingTop=0;spacingRight=12;spacingBottom=0;\" vertex=\"1\" parent=\"1\"&gt;&lt;mxGeometry x=\"0\" y=\"0\" width=\"260\" height=\"60\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;UserObject label=\"\" placeholders=\"1\" awskit_part=\"icon\" id=\"2-icon\"&gt;&lt;mxCell style=\"shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.security_group;fillColor=#DD344C;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;\" vertex=\"1\" parent=\"2\"&gt;&lt;mxGeometry x=\"12\" y=\"14\" width=\"32\" height=\"32\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;/root&gt;&lt;/mxGraphModel&gt;",
+  "w": 260,
+  "h": 60,
+  "title": "Security group"
+ },
+ {
+  "xml": "&lt;mxGraphModel&gt;&lt;root&gt;&lt;mxCell id=\"0\"/&gt;&lt;mxCell id=\"1\" parent=\"0\"/&gt;&lt;UserObject label='&amp;lt;b&amp;gt;%name%&amp;lt;/b&amp;gt;&amp;lt;br&amp;gt;&amp;lt;span style=\"font-size:11px;color:#B4B2A9;font-weight:normal\"&amp;gt;%kind% endpoint for %service%&amp;lt;/span&amp;gt;' placeholders=\"1\" awskit_type=\"endpoint\" kind=\"gateway\" name=\"s3\" route_tables=\"private\" security_groups=\"\" service=\"s3\" id=\"2\"&gt;&lt;mxCell style=\"rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=middle;spacing=0;spacingLeft=56;spacingTop=0;spacingRight=12;spacingBottom=0;\" vertex=\"1\" parent=\"1\"&gt;&lt;mxGeometry x=\"0\" y=\"0\" width=\"260\" height=\"60\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;UserObject label=\"\" placeholders=\"1\" awskit_part=\"icon\" id=\"2-icon\"&gt;&lt;mxCell style=\"shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.endpoints;fillColor=#8C4FFF;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;\" vertex=\"1\" parent=\"2\"&gt;&lt;mxGeometry x=\"12\" y=\"14\" width=\"32\" height=\"32\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;/root&gt;&lt;/mxGraphModel&gt;",
+  "w": 260,
+  "h": 60,
+  "title": "Gateway endpoint (S3)"
+ },
+ {
+  "xml": "&lt;mxGraphModel&gt;&lt;root&gt;&lt;mxCell id=\"0\"/&gt;&lt;mxCell id=\"1\" parent=\"0\"/&gt;&lt;UserObject label='&amp;lt;b&amp;gt;%name%&amp;lt;/b&amp;gt;&amp;lt;br&amp;gt;&amp;lt;span style=\"font-size:11px;color:#B4B2A9;font-weight:normal\"&amp;gt;%kind% endpoint for %service%&amp;lt;/span&amp;gt;' placeholders=\"1\" awskit_type=\"endpoint\" kind=\"interface\" name=\"ssm\" route_tables=\"\" security_groups=\"\" service=\"ssm\" id=\"2\"&gt;&lt;mxCell style=\"rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=middle;spacing=0;spacingLeft=56;spacingTop=0;spacingRight=12;spacingBottom=0;\" vertex=\"1\" parent=\"1\"&gt;&lt;mxGeometry x=\"0\" y=\"0\" width=\"260\" height=\"60\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;UserObject label=\"\" placeholders=\"1\" awskit_part=\"icon\" id=\"2-icon\"&gt;&lt;mxCell style=\"shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.endpoints;fillColor=#8C4FFF;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;\" vertex=\"1\" parent=\"2\"&gt;&lt;mxGeometry x=\"12\" y=\"14\" width=\"32\" height=\"32\" as=\"geometry\"/&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;/root&gt;&lt;/mxGraphModel&gt;",
+  "w": 260,
+  "h": 60,
+  "title": "Interface endpoint"
+ },
+ {
+  "xml": "&lt;mxGraphModel&gt;&lt;root&gt;&lt;mxCell id=\"0\"/&gt;&lt;mxCell id=\"1\" parent=\"0\"/&gt;&lt;UserObject label=\"%protocol% %ports%\" placeholders=\"1\" awskit_type=\"sg-rule\" description=\"\" ports=\"443\" protocol=\"tcp\" id=\"2\"&gt;&lt;mxCell style=\"edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=16;html=1;strokeColor=#EF9F27;strokeWidth=1.25;endArrow=block;endFill=1;endSize=6;fontSize=10;fontColor=#EF9F27;labelBackgroundColor=#1F1F1E;\" edge=\"1\" parent=\"1\"&gt;&lt;mxGeometry relative=\"1\" as=\"geometry\"&gt;&lt;mxPoint x=\"0\" y=\"40\" as=\"sourcePoint\"/&gt;&lt;mxPoint x=\"160\" y=\"40\" as=\"targetPoint\"/&gt;&lt;/mxGeometry&gt;&lt;/mxCell&gt;&lt;/UserObject&gt;&lt;/root&gt;&lt;/mxGraphModel&gt;",
+  "w": 160,
+  "h": 80,
+  "title": "Security group arrow"
+ }
+]</mxlibrary>

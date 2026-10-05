@@ -49,6 +49,9 @@ class SweepPage(Page):
                          "Delete, and type delete.")
         self.items = []
         self.warnings = []
+        # "scan", "teardown" or "spend" while one runs. Only one at a time, so a scan can't
+        # take over the status bar's Stop button from a teardown, or start a second one.
+        self.job = None
 
         bar = self.toolbar()
         account_pickers(self)
@@ -56,9 +59,10 @@ class SweepPage(Page):
         bar.append(self.regions)
         self.scan_btn = button("Scan", self.scan, css="suggested-action")
         bar.append(self.scan_btn)
-        bar.append(button("Month-to-date spend", self.spend,
-                          tooltip="Asks Cost Explorer what you've actually spent this month. "
-                                  "Each request costs $0.01."))
+        self.spend_btn = button("Month-to-date spend", self.spend,
+                                tooltip="Asks Cost Explorer what you've actually spent this month. "
+                                        "Each request costs $0.01.")
+        bar.append(self.spend_btn)
         bar.append(spacer())
         bar.append(button("Settings", self.settings))
         bar.append(button("Export", self.export))
@@ -83,8 +87,8 @@ class SweepPage(Page):
 
         actions = hbox(6)
         margins(actions, 8)
-        actions.append(button("Tick everything deletable", lambda: self.table.set_all_checked(
-            True, lambda it: it.obj.can_delete and not it.obj.kept)))
+        actions.append(button("Tick everything deletable", self.tick_all_deletable,
+                              tooltip="Ticks the deletable rows the filter is showing"))
         actions.append(button("Untick all", lambda: self.table.set_all_checked(False)))
         actions.append(button("Keep ticked", self.keep_ticked,
                               tooltip="Add the ticked items to the keep list so they're never "
@@ -106,11 +110,20 @@ class SweepPage(Page):
     def profiles_changed(self):
         fill_accounts(self)
 
+    def set_job(self, job):
+        """Scan, spend and Delete stay off while any of them runs."""
+        self.job = job
+        self.scan_btn.set_sensitive(job is None)
+        self.spend_btn.set_sensitive(job is None)
+        self.update_selection()
+
     def scan(self):
+        if self.job:
+            return
         profiles = chosen_profiles(self)
         regions = self.regions.selected() or None
         cancel = self.new_cancel()
-        self.scan_btn.set_sensitive(False)
+        self.set_job("scan")
         self.status.busy("Starting scan...", cancel)
         progress = on_main(self.status.progress)
         run_bg(lambda: sweep.scan(profiles, regions, progress=progress, cancel=cancel),
@@ -118,7 +131,7 @@ class SweepPage(Page):
 
     def scan_done(self, result):
         self.items, self.warnings = result
-        self.scan_btn.set_sensitive(True)
+        self.set_job(None)
         self.show_items()
         stopped = " (stopped early)" if self.cancel.is_set() else ""
         self.status.idle(f"Scan finished{stopped} at {datetime.now():%H:%M}.")
@@ -138,8 +151,16 @@ class SweepPage(Page):
         self.summary.set_text(sweep.summary_line(self.items))
         self.update_selection()
 
+    def keep_rules_changed(self):
+        """The keep list or keep tag may have changed in Settings. Work out which rows are
+        kept again, so a newly kept item can't be ticked any more."""
+        if not self.items:
+            return
+        sweep.apply_keep(self.items)
+        self.show_items()
+
     def failed(self, exc):
-        self.scan_btn.set_sensitive(True)
+        self.set_job(None)
         self.status.idle("")
         show_message(self.win, "Scan failed", error_text(exc))
 
@@ -169,47 +190,72 @@ class SweepPage(Page):
             lines.append(it.note)
         self.detail.set_text("\n".join(lines))
 
-    def update_selection(self):
+    def tick_all_deletable(self):
+        """Tick the deletable rows the filter is showing. Hidden rows are left alone."""
+        for r in self.table.visible_items():
+            if r.checkable and r.obj.can_delete and not r.obj.kept:
+                r.checked = True
+        self.update_selection()
+
+    def ticked_rows(self):
+        """The ticked items, and the ids of the ones the filter is hiding."""
+        shown = {id(r.obj) for r in self.table.visible_items()}
         ticked = [r.obj for r in self.table.checked()]
-        self.delete_btn.set_sensitive(bool(ticked))
+        return ticked, {id(it) for it in ticked if id(it) not in shown}
+
+    def update_selection(self):
+        ticked, hidden = self.ticked_rows()
+        self.delete_btn.set_sensitive(bool(ticked) and self.job is None)
         if ticked:
             self.sel_label.set_text(f"{len(ticked)} ticked, about "
-                                    f"{money(sweep.total_monthly(ticked))}/month")
+                                    f"{money(sweep.total_monthly(ticked))}/month"
+                                    + (f", {len(hidden)} hidden by the filter" if hidden else ""))
         else:
             self.sel_label.set_text("")
 
     # ---------------------------------------------------------------- teardown
-    def plan_lines(self, ticked):
+    def plan_lines(self, ticked, hidden=()):
         order = sorted(ticked, key=lambda i: (sweep.KINDS[i.kind].order, i.region, i.id))
         return [f"{i.profile or 'default':<14} {i.region:<15} {i.kind_label:<28} {i.id}"
-                + (f"  {i.name}" if i.name else "") for i in order]
+                + (f"  {i.name}" if i.name else "")
+                + ("  (hidden by the filter)" if id(i) in hidden else "") for i in order]
 
     def dry_run(self):
-        ticked = [r.obj for r in self.table.checked()]
+        ticked, hidden = self.ticked_rows()
         if not ticked:
             self.detail.set_text("Tick some rows first.")
             return
         self.detail.set_text("Teardown would go in this order:\n\n" +
-                             "\n".join(self.plan_lines(ticked)) +
+                             "\n".join(self.plan_lines(ticked, hidden)) +
                              "\n\nNAT gateways go before their Elastic IPs, AMIs before their "
                              "snapshots, and database instances before their clusters.")
 
     def teardown(self):
-        ticked = [r.obj for r in self.table.checked()]
-        if not ticked:
+        ticked, hidden = self.ticked_rows()
+        if not ticked or self.job:
             return
         heading = (f"Delete {len(ticked)} item(s), about "
                    f"{money(sweep.total_monthly(ticked))}/month?")
-        ConfirmDeleteDialog(self.win, heading, self.plan_lines(ticked),
+        if hidden:
+            heading += (f" {len(hidden)} of them are hidden by the filter on the table. "
+                        "They're marked in the list below.")
+        ConfirmDeleteDialog(self.win, heading, self.plan_lines(ticked, hidden),
                             lambda: self.run_teardown(ticked)).present()
 
     def run_teardown(self, ticked):
+        if self.job:
+            return
         cancel = self.new_cancel()
-        self.delete_btn.set_sensitive(False)
+        self.set_job("teardown")
         self.status.busy("Deleting...", cancel)
         progress = on_main(self.status.progress)
         run_bg(lambda: sweep.teardown(ticked, progress=progress, cancel=cancel),
-               self.teardown_done, self.failed)
+               self.teardown_done, self.teardown_failed)
+
+    def teardown_failed(self, exc):
+        self.set_job(None)
+        self.status.idle("")
+        show_message(self.win, "Teardown failed", error_text(exc))
 
     def teardown_done(self, results):
         ok = sum(1 for _, success, _ in results if success)
@@ -220,12 +266,13 @@ class SweepPage(Page):
         for row in self.table.items():
             if id(row.obj) in outcome:
                 success = outcome[id(row.obj)]
-                row.data["action"] = "deleted" if success else "failed"
-                row.data["_dim"] = success
+                kept = row.obj.kept and not success
+                row.data["action"] = "deleted" if success else "kept" if kept else "failed"
+                row.data["_dim"] = success or kept
                 row.checked = False
-                row.checkable = not success
+                row.checkable = not success and not kept
         self.table.refresh_rows()
-        self.update_selection()
+        self.set_job(None)
         self.detail.set_text(f"{ok} of {len(results)} done.\n\n" + "\n".join(log) +
                              "\n\nSome things take a few minutes to go away, and some only free "
                              "up their dependents once they're gone. Scan again in a few "
@@ -241,15 +288,28 @@ class SweepPage(Page):
         for it in ticked:
             if it.id not in keep:
                 keep.append(it.id)
-            it.kept = True
         cfg["keep"] = keep
-        save_config(cfg)
+        if not save_config(cfg):
+            show_message(self.win, "Couldn't save the keep list")
+            return
+        for it in ticked:
+            it.kept = True
         self.show_items()
-        self.status.idle(f"Added {len(ticked)} item(s) to the keep list.")
+        msg = f"Added {len(ticked)} item(s) to the keep list."
+        if self.job is None:
+            self.status.idle(msg)
+        else:
+            # Leave the status bar alone so its Stop button still stops the running job.
+            # Teardown reads the keep list before each item, so this still counts for the
+            # items it hasn't reached yet.
+            self.detail.set_text(msg)
 
     # ---------------------------------------------------------------- extras
     def spend(self):
+        if self.job:
+            return
         profiles = chosen_profiles(self)
+        self.set_job("spend")
         self.status.busy("Asking Cost Explorer...", progress=False)
 
         def work():
@@ -274,6 +334,7 @@ class SweepPage(Page):
                 lines.append("")
             lines.append("Cost Explorer data can lag up to a day. Each request costs $0.01.")
             self.detail.set_text("\n".join(lines))
+            self.set_job(None)
             self.status.idle("Spend loaded.")
         run_bg(work, done, self.failed)
 
@@ -288,7 +349,7 @@ class SweepPage(Page):
         export_rows(self.win, rows, self.EXPORT_COLS, "lab-sweep.md", title="Lab sweep")
 
     def settings(self):
-        SweepSettings(self.win, on_saved=lambda: self.show_items() if self.items else None).present()
+        SweepSettings(self.win, on_saved=self.keep_rules_changed).present()
 
 
 class SweepSettings(Gtk.Window):
@@ -321,7 +382,12 @@ class SweepSettings(Gtk.Window):
                                         placeholder_text="Empty means the current profile")
         self.sns = Gtk.Entry(text=cfg.get("sns_topic", ""),
                              placeholder_text="arn:aws:sns:us-east-1:111111111111:lab-alerts")
-        rows = [("Keep tag", self.keep_tag, "Resources with this tag key are always kept."),
+        rows = [("Keep tag", self.keep_tag,
+                 "Resources with this tag key are kept. It only works for types whose tags come "
+                 "back with the scan: EC2 instances, NAT gateways, Elastic IPs, EBS volumes and "
+                 "snapshots, AMIs, VPC endpoints, VPNs, transit gateway attachments, Client VPN, "
+                 "Network Firewall, RDS, Secrets Manager, CloudHSM and GuardDuty. Use the keep "
+                 "list for anything else."),
                 ("Regions", self.regions, "Comma separated."),
                 ("Notify above ($/month)", self.threshold, "For the daily check."),
                 ("Daily check profiles", self.timer_profiles, "Comma separated."),

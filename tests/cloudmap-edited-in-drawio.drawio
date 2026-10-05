@@ -1,0 +1,316 @@
+<mxfile host="127.0.0.1" compressed="false">
+  <diagram id="awskit-network" name="Network map">
+    <mxGraphModel dx="1444" dy="1302" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1020" pageHeight="1360" background="#1F1F1E" math="0" shadow="0" adaptiveColors="none">
+      <root>
+        <UserObject label="" awskit_default_vpcs="0" awskit_map="network" awskit_redacted="0" awskit_service_linked="0" awskit_show="endpoints,routes,sgs" awskit_snapshot="two-az-vpc.cloudmap.json" awskit_theme="dark" id="0">
+          <mxCell />
+        </UserObject>
+        <mxCell id="awskit-layer-base" parent="0" value="Base" />
+        <UserObject label="&lt;b&gt;Account 222222222222&lt;/b&gt;" tooltip="&lt;b&gt;Account&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; 222222222222" placeholders="1" account="222222222222" aws_id="222222222222" awskit="1" awskit_geo="40,40,940,1120" awskit_lh="5c34db59" awskit_sh="46489fbd" kind="account" source="terraform" id="222222222222">
+          <mxCell parent="awskit-layer-base" style="rounded=1;arcSize=12;absoluteArcSize=1;fillColor=#1A1A1A;strokeColor=#444441;dashed=0;strokeWidth=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=14;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=48;spacingTop=12;spacingRight=14;spacingBottom=0;container=1;collapsible=0;recursiveResize=0;pointerEvents=0;" vertex="1">
+            <mxGeometry height="1120" width="940" x="40" y="40" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;Account&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; 222222222222" placeholders="1" aws_id="222222222222" awskit="1" role="icon" id="222222222222#icon">
+          <mxCell parent="222222222222" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.organizations_account;fillColor=none;strokeColor=#B4B2A9;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="24" width="24" x="14" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;us-west-2&lt;/b&gt;" tooltip="&lt;b&gt;Region&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; 222222222222/us-west-2&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222" placeholders="1" account="222222222222" aws_id="222222222222/us-west-2" awskit="1" awskit_geo="20,50,900,1050" awskit_lh="74b12c2e" awskit_sh="6609fd6c" kind="region" name="us-west-2" region="us-west-2" source="terraform" id="222222222222/us-west-2">
+          <mxCell parent="222222222222" style="shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_region;grIconSize=24;grStroke=1;strokeColor=#7A7974;fillColor=none;dashed=1;strokeWidth=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=14;fontColor=#D3D1C7;align=left;verticalAlign=top;spacing=0;spacingLeft=34;spacingTop=6;spacingRight=14;spacingBottom=0;container=1;collapsible=0;recursiveResize=0;pointerEvents=0;" vertex="1">
+            <mxGeometry height="1050" width="900" x="20" y="50" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;lab-vpc&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;10.0.0.0/16&lt;/span&gt;" tooltip="&lt;b&gt;VPC&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; vpc-0a1b2c3d4e5f60001&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2" placeholders="1" account="222222222222" aws_id="vpc-0a1b2c3d4e5f60001" awskit="1" awskit_geo="20,40,860,990" awskit_lh="c6d4851c" awskit_sh="eaf22514" cidr="10.0.0.0/16" default="false" kind="vpc" name="lab-vpc" region="us-west-2" source="terraform" tags="Name=lab-vpc" id="vpc-0a1b2c3d4e5f60001">
+          <mxCell parent="222222222222/us-west-2" style="shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc2;grIconSize=24;grStroke=1;strokeColor=#8C4FFF;fillColor=#1E1B29;dashed=0;strokeWidth=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=14;fontColor=#E2D6FF;align=left;verticalAlign=top;spacing=0;spacingLeft=34;spacingTop=6;spacingRight=14;spacingBottom=0;container=1;collapsible=0;recursiveResize=0;pointerEvents=0;" vertex="1">
+            <mxGeometry height="990" width="860" x="20" y="40" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;lab-web&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;Application, internet-facing&lt;/span&gt;" tooltip="&lt;b&gt;Load balancer&lt;/b&gt;&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;ARN:&lt;/b&gt; arn:aws:elasticloadbalancing:us-west-2:222222222222:loadbalancer/app/lab-web/0123456789abcdef&lt;br&gt;&lt;b&gt;Type:&lt;/b&gt; application&lt;br&gt;&lt;b&gt;Scheme:&lt;/b&gt; internet-facing" placeholders="1" account="222222222222" arn="arn:aws:elasticloadbalancing:us-west-2:222222222222:loadbalancer/app/lab-web/0123456789abcdef" aws_id="arn:aws:elasticloadbalancing:us-west-2:222222222222:loadbalancer/app/lab-web/0123456789abcdef" awskit="1" awskit_geo="20,60,260,60" awskit_lh="7e38818e" awskit_sh="6ad7162a" azs="us-west-2a, us-west-2b" kind="lb" name="lab-web" region="us-west-2" scheme="internet-facing" source="terraform" subnets="subnet-0a1b2c3d4e5f60011, subnet-0a1b2c3d4e5f60012" type="application" vpc="vpc-0a1b2c3d4e5f60001" id="arn:aws:elasticloadbalancing:us-west-2:222222222222:loadbalancer/app/lab-web/0123456789abcdef">
+          <mxCell parent="vpc-0a1b2c3d4e5f60001" style="rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=56;spacingTop=13;spacingRight=12;spacingBottom=0;" vertex="1">
+            <mxGeometry height="60" width="260" x="20" y="60" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;Load balancer&lt;/b&gt;&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;ARN:&lt;/b&gt; arn:aws:elasticloadbalancing:us-west-2:222222222222:loadbalancer/app/lab-web/0123456789abcdef&lt;br&gt;&lt;b&gt;Type:&lt;/b&gt; application&lt;br&gt;&lt;b&gt;Scheme:&lt;/b&gt; internet-facing" placeholders="1" aws_id="arn:aws:elasticloadbalancing:us-west-2:222222222222:loadbalancer/app/lab-web/0123456789abcdef" awskit="1" role="icon" id="arn:aws:elasticloadbalancing:us-west-2:222222222222:loadbalancer/app/lab-web/0123456789abcdef#icon">
+          <mxCell parent="arn:aws:elasticloadbalancing:us-west-2:222222222222:loadbalancer/app/lab-web/0123456789abcdef" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.application_load_balancer;fillColor=#8C4FFF;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="32" width="32" x="12" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;us-west-2a&lt;/b&gt;" tooltip="&lt;b&gt;Availability Zone&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; vpc-0a1b2c3d4e5f60001/us-west-2a&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2" placeholders="1" account="222222222222" aws_id="vpc-0a1b2c3d4e5f60001/us-west-2a" awskit="1" awskit_geo="20,140,400,530" awskit_lh="d3e8eac6" awskit_sh="a984e6a5" kind="az" name="us-west-2a" region="us-west-2" source="terraform" id="vpc-0a1b2c3d4e5f60001/us-west-2a">
+          <mxCell parent="vpc-0a1b2c3d4e5f60001" style="rounded=1;arcSize=12;absoluteArcSize=1;fillColor=none;strokeColor=#5F5E5A;dashed=1;dashPattern=6 4;strokeWidth=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=14;fontColor=#B4B2A9;align=left;verticalAlign=top;spacing=0;spacingLeft=12;spacingTop=12;spacingRight=74;spacingBottom=0;container=1;collapsible=0;recursiveResize=0;pointerEvents=0;" vertex="1">
+            <mxGeometry height="530" width="400" x="20" y="140" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;public-a&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px&quot;&gt;web tier, keep it small&lt;/span&gt;" tooltip="&lt;b&gt;Subnet&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; subnet-0a1b2c3d4e5f60011&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;CIDR:&lt;/b&gt; 10.0.1.0/24&lt;br&gt;&lt;b&gt;Zone:&lt;/b&gt; us-west-2a&lt;br&gt;&lt;b&gt;Route table:&lt;/b&gt; rtb-0a1b2c3d4e5f60051" placeholders="1" account="222222222222" aws_id="subnet-0a1b2c3d4e5f60011" awskit="1" awskit_geo="20,50,360,220" awskit_lh="294aa908" awskit_sh="670ace4d" az="us-west-2a" cidr="10.0.1.0/24" kind="subnet" map_public_ip="true" name="public-a" public="true" region="us-west-2" route_table="rtb-0a1b2c3d4e5f60051" source="terraform" tags="Name=public-a" vpc="vpc-0a1b2c3d4e5f60001" id="subnet-0a1b2c3d4e5f60011">
+          <mxCell parent="vpc-0a1b2c3d4e5f60001/us-west-2a" style="shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;grIconSize=24;grStroke=1;strokeColor=#7AA116;fillColor=#1B2414;dashed=0;strokeWidth=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=14;fontColor=#D7E8B5;align=left;verticalAlign=top;spacing=0;spacingLeft=34;spacingTop=6;spacingRight=74;spacingBottom=0;container=1;collapsible=0;recursiveResize=0;pointerEvents=0;" vertex="1">
+            <mxGeometry height="220" width="360" x="20" y="50" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;bastion&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;t3.micro, running, 10.0.1.10&lt;/span&gt;" tooltip="&lt;b&gt;EC2 instance&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; i-0a1b2c3d4e5f60093&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;State:&lt;/b&gt; running&lt;br&gt;&lt;b&gt;Type:&lt;/b&gt; t3.micro&lt;br&gt;&lt;b&gt;Private IP:&lt;/b&gt; 10.0.1.10&lt;br&gt;&lt;b&gt;Public IP:&lt;/b&gt; 34.212.10.30&lt;br&gt;&lt;b&gt;Problem (high):&lt;/b&gt; IMDSv1 allowed: instance metadata answers without a token, and the instance has a public IP&lt;br&gt;&lt;b&gt;Problem (high):&lt;/b&gt; Public IP and a security group open to the internet (sg-0a1b2c3d4e5f60063)" placeholders="1" account="222222222222" aws_id="i-0a1b2c3d4e5f60093" awskit="1" awskit_geo="20,60,320,60" awskit_lh="b959c430" awskit_sh="5825431c" flags="high: IMDSv1 allowed: instance metadata answers without a token, and the instance has a public IP; high: Public IP and a security group open to the internet (sg-0a1b2c3d4e5f60063)" imds_endpoint="enabled" imds_tokens="optional" kind="instance" name="bastion" private_ip="10.0.1.10" public_ip="34.212.10.30" region="us-west-2" security_groups="sg-0a1b2c3d4e5f60063" source="terraform" state="running" subnet="subnet-0a1b2c3d4e5f60011" tags="Name=bastion" type="t3.micro" vpc="vpc-0a1b2c3d4e5f60001" id="i-0a1b2c3d4e5f60093">
+          <mxCell parent="subnet-0a1b2c3d4e5f60011" style="rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=56;spacingTop=13;spacingRight=72;spacingBottom=0;" vertex="1">
+            <mxGeometry height="60" width="320" x="20" y="160" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;EC2 instance&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; i-0a1b2c3d4e5f60093&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;State:&lt;/b&gt; running&lt;br&gt;&lt;b&gt;Type:&lt;/b&gt; t3.micro&lt;br&gt;&lt;b&gt;Private IP:&lt;/b&gt; 10.0.1.10&lt;br&gt;&lt;b&gt;Public IP:&lt;/b&gt; 34.212.10.30&lt;br&gt;&lt;b&gt;Problem (high):&lt;/b&gt; IMDSv1 allowed: instance metadata answers without a token, and the instance has a public IP&lt;br&gt;&lt;b&gt;Problem (high):&lt;/b&gt; Public IP and a security group open to the internet (sg-0a1b2c3d4e5f60063)" placeholders="1" aws_id="i-0a1b2c3d4e5f60093" awskit="1" role="icon" id="i-0a1b2c3d4e5f60093#icon">
+          <mxCell parent="i-0a1b2c3d4e5f60093" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2;fillColor=#ED7100;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="32" width="32" x="12" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;lab-nat-a&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;public NAT, 34.212.10.20&lt;/span&gt;" tooltip="&lt;b&gt;NAT gateway&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; nat-0a1b2c3d4e5f60041&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Public IP:&lt;/b&gt; 34.212.10.20" placeholders="1" account="222222222222" aws_id="nat-0a1b2c3d4e5f60041" awskit="1" awskit_geo="20,140,320,60" awskit_lh="b2f1e65d" awskit_sh="5825431c" connectivity="public" kind="nat" name="lab-nat-a" public_ip="34.212.10.20" region="us-west-2" source="terraform" subnet="subnet-0a1b2c3d4e5f60011" tags="Name=lab-nat-a" vpc="vpc-0a1b2c3d4e5f60001" id="nat-0a1b2c3d4e5f60041">
+          <mxCell parent="subnet-0a1b2c3d4e5f60011" style="rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=56;spacingTop=13;spacingRight=72;spacingBottom=0;" vertex="1">
+            <mxGeometry height="60" width="320" x="20" y="140" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;NAT gateway&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; nat-0a1b2c3d4e5f60041&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Public IP:&lt;/b&gt; 34.212.10.20" placeholders="1" aws_id="nat-0a1b2c3d4e5f60041" awskit="1" role="icon" id="nat-0a1b2c3d4e5f60041#icon">
+          <mxCell parent="nat-0a1b2c3d4e5f60041" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.nat_gateway;fillColor=#8C4FFF;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="32" width="32" x="12" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;private-a&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#8BB7B8;font-weight:normal&quot;&gt;10.0.11.0/24, private, us-west-2a&lt;/span&gt;" tooltip="&lt;b&gt;Subnet&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; subnet-0a1b2c3d4e5f60021&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;CIDR:&lt;/b&gt; 10.0.11.0/24&lt;br&gt;&lt;b&gt;Zone:&lt;/b&gt; us-west-2a&lt;br&gt;&lt;b&gt;Route table:&lt;/b&gt; rtb-0a1b2c3d4e5f60052" placeholders="1" account="222222222222" aws_id="subnet-0a1b2c3d4e5f60021" awskit="1" awskit_geo="20,290,360,220" awskit_lh="d9679f5f" awskit_sh="e675aa26" az="us-west-2a" cidr="10.0.11.0/24" kind="subnet" map_public_ip="false" name="private-a" public="false" region="us-west-2" route_table="rtb-0a1b2c3d4e5f60052" source="terraform" tags="Name=private-a" vpc="vpc-0a1b2c3d4e5f60001" id="subnet-0a1b2c3d4e5f60021">
+          <mxCell parent="vpc-0a1b2c3d4e5f60001/us-west-2a" style="shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;grIconSize=24;grStroke=1;strokeColor=#00A4A6;fillColor=#122326;dashed=0;strokeWidth=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=14;fontColor=#B5E3E4;align=left;verticalAlign=top;spacing=0;spacingLeft=34;spacingTop=6;spacingRight=74;spacingBottom=0;container=1;collapsible=0;recursiveResize=0;pointerEvents=0;" vertex="1">
+            <mxGeometry height="220" width="360" x="20" y="290" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;app-1&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;t3.small, running, 10.0.11.10&lt;/span&gt;" tooltip="&lt;b&gt;EC2 instance&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; i-0a1b2c3d4e5f60091&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;State:&lt;/b&gt; running&lt;br&gt;&lt;b&gt;Type:&lt;/b&gt; t3.small&lt;br&gt;&lt;b&gt;Private IP:&lt;/b&gt; 10.0.11.10" placeholders="1" account="222222222222" aws_id="i-0a1b2c3d4e5f60091" awskit="1" awskit_geo="20,60,320,60" awskit_lh="779b66a1" awskit_sh="5825431c" imds_endpoint="enabled" imds_tokens="required" kind="instance" name="app-1" private_ip="10.0.11.10" region="us-west-2" security_groups="sg-0a1b2c3d4e5f60062" source="terraform" state="running" subnet="subnet-0a1b2c3d4e5f60021" tags="Name=app-1" type="t3.small" vpc="vpc-0a1b2c3d4e5f60001" id="i-0a1b2c3d4e5f60091">
+          <mxCell parent="subnet-0a1b2c3d4e5f60021" style="rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=56;spacingTop=13;spacingRight=72;spacingBottom=0;" vertex="1">
+            <mxGeometry height="60" width="320" x="20" y="60" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;EC2 instance&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; i-0a1b2c3d4e5f60091&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;State:&lt;/b&gt; running&lt;br&gt;&lt;b&gt;Type:&lt;/b&gt; t3.small&lt;br&gt;&lt;b&gt;Private IP:&lt;/b&gt; 10.0.11.10" placeholders="1" aws_id="i-0a1b2c3d4e5f60091" awskit="1" role="icon" id="i-0a1b2c3d4e5f60091#icon">
+          <mxCell parent="i-0a1b2c3d4e5f60091" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2;fillColor=#ED7100;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="32" width="32" x="12" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;us-west-2b&lt;/b&gt;" tooltip="&lt;b&gt;Availability Zone&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; vpc-0a1b2c3d4e5f60001/us-west-2b&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2" placeholders="1" account="222222222222" aws_id="vpc-0a1b2c3d4e5f60001/us-west-2b" awskit="1" awskit_geo="440,140,400,530" awskit_lh="9ae6f578" awskit_sh="a984e6a5" kind="az" name="us-west-2b" region="us-west-2" source="terraform" id="vpc-0a1b2c3d4e5f60001/us-west-2b">
+          <mxCell parent="vpc-0a1b2c3d4e5f60001" style="rounded=1;arcSize=12;absoluteArcSize=1;fillColor=none;strokeColor=#5F5E5A;dashed=1;dashPattern=6 4;strokeWidth=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=14;fontColor=#B4B2A9;align=left;verticalAlign=top;spacing=0;spacingLeft=12;spacingTop=12;spacingRight=74;spacingBottom=0;container=1;collapsible=0;recursiveResize=0;pointerEvents=0;" vertex="1">
+            <mxGeometry height="530" width="400" x="440" y="140" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;public-b&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#A8B98A;font-weight:normal&quot;&gt;10.0.2.0/24, public, us-west-2b&lt;/span&gt;" tooltip="&lt;b&gt;Subnet&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; subnet-0a1b2c3d4e5f60012&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;CIDR:&lt;/b&gt; 10.0.2.0/24&lt;br&gt;&lt;b&gt;Zone:&lt;/b&gt; us-west-2b&lt;br&gt;&lt;b&gt;Route table:&lt;/b&gt; rtb-0a1b2c3d4e5f60051" placeholders="1" account="222222222222" aws_id="subnet-0a1b2c3d4e5f60012" awskit="1" awskit_geo="20,50,360,220" awskit_lh="2d0bd998" awskit_sh="bff2aad7" az="us-west-2b" cidr="10.0.2.0/24" kind="subnet" map_public_ip="true" name="public-b" public="true" region="us-west-2" route_table="rtb-0a1b2c3d4e5f60051" source="terraform" tags="Name=public-b" vpc="vpc-0a1b2c3d4e5f60001" id="subnet-0a1b2c3d4e5f60012">
+          <mxCell parent="vpc-0a1b2c3d4e5f60001/us-west-2b" style="shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;grIconSize=24;grStroke=1;strokeColor=#7AA116;fillColor=#1B2414;dashed=0;strokeWidth=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=14;fontColor=#D7E8B5;align=left;verticalAlign=top;spacing=0;spacingLeft=34;spacingTop=6;spacingRight=134;spacingBottom=0;container=1;collapsible=0;recursiveResize=0;pointerEvents=0;" vertex="1">
+            <mxGeometry height="220" width="360" x="20" y="50" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;private-b&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#8BB7B8;font-weight:normal&quot;&gt;10.0.12.0/24, private, us-west-2b&lt;/span&gt;" tooltip="&lt;b&gt;Subnet&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; subnet-0a1b2c3d4e5f60022&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;CIDR:&lt;/b&gt; 10.0.12.0/24&lt;br&gt;&lt;b&gt;Zone:&lt;/b&gt; us-west-2b&lt;br&gt;&lt;b&gt;Route table:&lt;/b&gt; rtb-0a1b2c3d4e5f60052" placeholders="1" account="222222222222" aws_id="subnet-0a1b2c3d4e5f60022" awskit="1" awskit_geo="20,290,360,220" awskit_lh="3b8f02c2" awskit_sh="e675aa26" az="us-west-2b" cidr="10.0.12.0/24" kind="subnet" map_public_ip="false" name="private-b" public="false" region="us-west-2" route_table="rtb-0a1b2c3d4e5f60052" source="terraform" tags="Name=private-b" vpc="vpc-0a1b2c3d4e5f60001" id="subnet-0a1b2c3d4e5f60022">
+          <mxCell parent="vpc-0a1b2c3d4e5f60001/us-west-2b" style="shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_security_group;grIconSize=24;grStroke=1;strokeColor=#00A4A6;fillColor=#122326;dashed=0;strokeWidth=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=14;fontColor=#B5E3E4;align=left;verticalAlign=top;spacing=0;spacingLeft=34;spacingTop=6;spacingRight=74;spacingBottom=0;container=1;collapsible=0;recursiveResize=0;pointerEvents=0;" vertex="1">
+            <mxGeometry height="220" width="360" x="20" y="290" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;app-2&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;t3.small, running, 10.0.12.10&lt;/span&gt;" tooltip="&lt;b&gt;EC2 instance&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; i-0a1b2c3d4e5f60092&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;State:&lt;/b&gt; running&lt;br&gt;&lt;b&gt;Type:&lt;/b&gt; t3.small&lt;br&gt;&lt;b&gt;Private IP:&lt;/b&gt; 10.0.12.10" placeholders="1" account="222222222222" aws_id="i-0a1b2c3d4e5f60092" awskit="1" awskit_geo="20,60,320,60" awskit_lh="6f0b4ea0" awskit_sh="5825431c" imds_endpoint="enabled" imds_tokens="required" kind="instance" name="app-2" private_ip="10.0.12.10" region="us-west-2" security_groups="sg-0a1b2c3d4e5f60062" source="terraform" state="running" subnet="subnet-0a1b2c3d4e5f60022" tags="Name=app-2" type="t3.small" vpc="vpc-0a1b2c3d4e5f60001" id="i-0a1b2c3d4e5f60092">
+          <mxCell parent="subnet-0a1b2c3d4e5f60022" style="rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=56;spacingTop=13;spacingRight=72;spacingBottom=0;" vertex="1">
+            <mxGeometry height="60" width="320" x="20" y="60" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;EC2 instance&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; i-0a1b2c3d4e5f60092&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;State:&lt;/b&gt; running&lt;br&gt;&lt;b&gt;Type:&lt;/b&gt; t3.small&lt;br&gt;&lt;b&gt;Private IP:&lt;/b&gt; 10.0.12.10" placeholders="1" aws_id="i-0a1b2c3d4e5f60092" awskit="1" role="icon" id="i-0a1b2c3d4e5f60092#icon">
+          <mxCell parent="i-0a1b2c3d4e5f60092" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2;fillColor=#ED7100;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="32" width="32" x="12" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;lab-postgres&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;postgres 16.4, db.t4g.micro&lt;/span&gt;" tooltip="&lt;b&gt;RDS database&lt;/b&gt;&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;ARN:&lt;/b&gt; arn:aws:rds:us-west-2:222222222222:db:lab-postgres&lt;br&gt;&lt;b&gt;Zone:&lt;/b&gt; us-west-2b&lt;br&gt;&lt;b&gt;Engine:&lt;/b&gt; postgres" placeholders="1" account="222222222222" arn="arn:aws:rds:us-west-2:222222222222:db:lab-postgres" aws_id="arn:aws:rds:us-west-2:222222222222:db:lab-postgres" awskit="1" awskit_geo="20,140,320,60" awskit_lh="0758b3ba" awskit_sh="5825431c" az="us-west-2b" class="db.t4g.micro" engine="postgres" kind="rds" name="lab-postgres" public="false" region="us-west-2" source="terraform" subnets="subnet-0a1b2c3d4e5f60021, subnet-0a1b2c3d4e5f60022" version="16.4" vpc="vpc-0a1b2c3d4e5f60001" id="arn:aws:rds:us-west-2:222222222222:db:lab-postgres">
+          <mxCell parent="subnet-0a1b2c3d4e5f60022" style="rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#004488;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=56;spacingTop=13;spacingRight=72;spacingBottom=0;" vertex="1">
+            <mxGeometry height="60" width="320" x="20" y="140" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;RDS database&lt;/b&gt;&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;ARN:&lt;/b&gt; arn:aws:rds:us-west-2:222222222222:db:lab-postgres&lt;br&gt;&lt;b&gt;Zone:&lt;/b&gt; us-west-2b&lt;br&gt;&lt;b&gt;Engine:&lt;/b&gt; postgres" placeholders="1" aws_id="arn:aws:rds:us-west-2:222222222222:db:lab-postgres" awskit="1" role="icon" id="arn:aws:rds:us-west-2:222222222222:db:lab-postgres#icon">
+          <mxCell parent="arn:aws:rds:us-west-2:222222222222:db:lab-postgres" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.rds_instance;fillColor=#7AA116;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="32" width="32" x="12" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;lab-igw&lt;/b&gt;" tooltip="&lt;b&gt;Internet gateway&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; igw-0a1b2c3d4e5f60031&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2" placeholders="1" account="222222222222" aws_id="igw-0a1b2c3d4e5f60031" awskit="1" awskit_geo="660,-20,180,40" awskit_lh="01aef400" awskit_sh="5785ba06" kind="igw" name="lab-igw" region="us-west-2" source="terraform" tags="Name=lab-igw" vpc="vpc-0a1b2c3d4e5f60001" id="igw-0a1b2c3d4e5f60031">
+          <mxCell parent="vpc-0a1b2c3d4e5f60001" style="rounded=1;arcSize=8;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=12;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=40;spacingTop=12;spacingRight=8;spacingBottom=0;" vertex="1">
+            <mxGeometry height="40" width="180" x="660" y="-20" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;Internet gateway&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; igw-0a1b2c3d4e5f60031&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2" placeholders="1" aws_id="igw-0a1b2c3d4e5f60031" awskit="1" role="icon" id="igw-0a1b2c3d4e5f60031#icon">
+          <mxCell parent="igw-0a1b2c3d4e5f60031" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.internet_gateway;fillColor=#8C4FFF;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="24" width="24" x="8" y="8" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <mxCell id="snowy-note" parent="awskit-layer-base" style="shape=note;whiteSpace=wrap;html=1;strokeColor=#B4B2A9;fontColor=#F1EFE8;fillColor=#202020;" value="Move the DB to its own subnet" vertex="1">
+          <mxGeometry height="50" width="220" x="700" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="snowy-arrow" edge="1" parent="awskit-layer-base" source="snowy-note" style="endArrow=classic;html=1;rounded=0;strokeColor=#B4B2A9;fontColor=#F1EFE8;" target="arn:aws:rds:us-west-2:222222222222:db:lab-postgres" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="awskit-layer-routes" parent="0" value="Routes" />
+        <UserObject label="0.0.0.0/0" tooltip="&lt;b&gt;public-a routes 0.0.0.0/0 to lab-igw&lt;/b&gt;&lt;br&gt;&lt;b&gt;Route table:&lt;/b&gt; rtb-0a1b2c3d4e5f60051" placeholders="1" aws_dst="igw-0a1b2c3d4e5f60031" aws_src="subnet-0a1b2c3d4e5f60011" awskit="1" awskit_pts="490,430 490,130" awskit_sh="9c2df2d4" kind="route" id="route:subnet-0a1b2c3d4e5f60011-&gt;igw-0a1b2c3d4e5f60031">
+          <mxCell edge="1" parent="awskit-layer-routes" source="subnet-0a1b2c3d4e5f60011" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=16;html=1;orthogonalLoop=1;jettySize=auto;strokeColor=#FF4040;strokeWidth=1.25;dashed=0;endArrow=block;endFill=1;endSize=6;startArrow=none;fontFamily=Helvetica;fontSize=10;fontColor=#9D6BFF;labelBackgroundColor=#1F1F1E;exitX=1;exitY=0.5;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" target="igw-0a1b2c3d4e5f60031">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="490" y="430" />
+                <mxPoint x="490" y="130" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="0.0.0.0/0" tooltip="&lt;b&gt;public-b routes 0.0.0.0/0 to lab-igw&lt;/b&gt;&lt;br&gt;&lt;b&gt;Route table:&lt;/b&gt; rtb-0a1b2c3d4e5f60051" placeholders="1" aws_dst="igw-0a1b2c3d4e5f60031" aws_src="subnet-0a1b2c3d4e5f60012" awskit="1" awskit_pts="" awskit_sh="c6e88dcb" kind="route" id="route:subnet-0a1b2c3d4e5f60012-&gt;igw-0a1b2c3d4e5f60031">
+          <mxCell edge="1" parent="awskit-layer-routes" source="subnet-0a1b2c3d4e5f60012" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=16;html=1;orthogonalLoop=1;jettySize=auto;strokeColor=#9D6BFF;strokeWidth=1.25;dashed=0;endArrow=block;endFill=1;endSize=6;startArrow=none;fontFamily=Helvetica;fontSize=10;fontColor=#9D6BFF;labelBackgroundColor=#1F1F1E;exitX=0.7778;exitY=0;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0.4444;entryY=1;entryDx=0;entryDy=0;entryPerimeter=0;" target="igw-0a1b2c3d4e5f60031">
+            <mxGeometry relative="1" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="0.0.0.0/0" tooltip="&lt;b&gt;private-a routes 0.0.0.0/0 to lab-nat-a&lt;/b&gt;&lt;br&gt;&lt;b&gt;Route table:&lt;/b&gt; rtb-0a1b2c3d4e5f60052" placeholders="1" aws_dst="nat-0a1b2c3d4e5f60041" aws_src="subnet-0a1b2c3d4e5f60021" awskit="1" awskit_pts="" awskit_sh="b3395182" kind="route" id="route:subnet-0a1b2c3d4e5f60021-&gt;nat-0a1b2c3d4e5f60041">
+          <mxCell edge="1" parent="awskit-layer-routes" source="subnet-0a1b2c3d4e5f60021" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=16;html=1;orthogonalLoop=1;jettySize=auto;strokeColor=#9D6BFF;strokeWidth=1.25;dashed=0;endArrow=block;endFill=1;endSize=6;startArrow=none;fontFamily=Helvetica;fontSize=10;fontColor=#9D6BFF;labelBackgroundColor=#1F1F1E;exitX=0.5;exitY=0;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;entryPerimeter=0;" target="nat-0a1b2c3d4e5f60041">
+            <mxGeometry relative="1" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="S3 prefix list" tooltip="&lt;b&gt;private-a routes S3 prefix list to S3&lt;/b&gt;&lt;br&gt;&lt;b&gt;Route table:&lt;/b&gt; rtb-0a1b2c3d4e5f60052" placeholders="1" aws_dst="vpce-0a1b2c3d4e5f60081" aws_src="subnet-0a1b2c3d4e5f60021" awskit="1" awskit_pts="" awskit_sh="53651dbd" kind="route" id="route:subnet-0a1b2c3d4e5f60021-&gt;vpce-0a1b2c3d4e5f60081">
+          <mxCell edge="1" parent="awskit-layer-routes" source="subnet-0a1b2c3d4e5f60021" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=16;html=1;orthogonalLoop=1;jettySize=auto;strokeColor=#9D6BFF;strokeWidth=1.25;dashed=0;endArrow=block;endFill=1;endSize=6;startArrow=none;fontFamily=Helvetica;fontSize=10;fontColor=#9D6BFF;labelBackgroundColor=#1F1F1E;exitX=0.3333;exitY=1;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0.5385;entryY=0;entryDx=0;entryDy=0;entryPerimeter=0;" target="vpce-0a1b2c3d4e5f60081">
+            <mxGeometry relative="1" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="0.0.0.0/0" tooltip="&lt;b&gt;private-b routes 0.0.0.0/0 to lab-nat-a&lt;/b&gt;&lt;br&gt;&lt;b&gt;Route table:&lt;/b&gt; rtb-0a1b2c3d4e5f60052" placeholders="1" aws_dst="nat-0a1b2c3d4e5f60041" aws_src="subnet-0a1b2c3d4e5f60022" awskit="1" awskit_pts="720,530 300,530" awskit_sh="b3395182" kind="route" id="route:subnet-0a1b2c3d4e5f60022-&gt;nat-0a1b2c3d4e5f60041">
+          <mxCell edge="1" parent="awskit-layer-routes" source="subnet-0a1b2c3d4e5f60022" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=16;html=1;orthogonalLoop=1;jettySize=auto;strokeColor=#9D6BFF;strokeWidth=1.25;dashed=0;endArrow=block;endFill=1;endSize=6;startArrow=none;fontFamily=Helvetica;fontSize=10;fontColor=#9D6BFF;labelBackgroundColor=#1F1F1E;exitX=0.5;exitY=0;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;entryPerimeter=0;" target="nat-0a1b2c3d4e5f60041">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="720" y="530" />
+                <mxPoint x="300" y="530" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <UserObject label="S3 prefix list" tooltip="&lt;b&gt;private-b routes S3 prefix list to S3&lt;/b&gt;&lt;br&gt;&lt;b&gt;Route table:&lt;/b&gt; rtb-0a1b2c3d4e5f60052" placeholders="1" aws_dst="vpce-0a1b2c3d4e5f60081" aws_src="subnet-0a1b2c3d4e5f60022" awskit="1" awskit_pts="720,840 230,840" awskit_sh="95fc4500" kind="route" id="route:subnet-0a1b2c3d4e5f60022-&gt;vpce-0a1b2c3d4e5f60081">
+          <mxCell edge="1" parent="awskit-layer-routes" source="subnet-0a1b2c3d4e5f60022" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=16;html=1;orthogonalLoop=1;jettySize=auto;strokeColor=#9D6BFF;strokeWidth=1.25;dashed=0;endArrow=block;endFill=1;endSize=6;startArrow=none;fontFamily=Helvetica;fontSize=10;fontColor=#9D6BFF;labelBackgroundColor=#1F1F1E;exitX=0.5;exitY=1;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;entryPerimeter=0;" target="vpce-0a1b2c3d4e5f60081">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="720" y="840" />
+                <mxPoint x="230" y="840" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <mxCell id="awskit-layer-sgs" parent="0" value="Security groups" />
+        <UserObject label="&lt;b&gt;lab-alb&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;port 443, port 80 open to the internet&lt;/span&gt;" tooltip="&lt;b&gt;Security group&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; sg-0a1b2c3d4e5f60061&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Description:&lt;/b&gt; Web traffic to the load balancer&lt;br&gt;&lt;b&gt;In:&lt;/b&gt; tcp 443 from 0.0.0.0/0&lt;br&gt;&lt;b&gt;In:&lt;/b&gt; tcp 80 from 0.0.0.0/0" placeholders="1" account="222222222222" aws_id="sg-0a1b2c3d4e5f60061" awskit="1" awskit_geo="100,960,260,60" awskit_in="vpc-0a1b2c3d4e5f60001" awskit_lh="5593b4c0" awskit_sh="6ad7162a" description="Web traffic to the load balancer" egress="[{&quot;cidrs&quot;:[&quot;0.0.0.0/0&quot;],&quot;description&quot;:&quot;&quot;,&quot;from&quot;:0,&quot;groups&quot;:[],&quot;protocol&quot;:&quot;-1&quot;,&quot;to&quot;:0}]" ingress="[{&quot;cidrs&quot;:[&quot;0.0.0.0/0&quot;],&quot;description&quot;:&quot;&quot;,&quot;from&quot;:443,&quot;groups&quot;:[],&quot;protocol&quot;:&quot;tcp&quot;,&quot;to&quot;:443},{&quot;cidrs&quot;:[&quot;0.0.0.0/0&quot;],&quot;description&quot;:&quot;&quot;,&quot;from&quot;:80,&quot;groups&quot;:[],&quot;protocol&quot;:&quot;tcp&quot;,&quot;to&quot;:80}]" kind="sg" name="lab-alb" open_to_internet="port 443, port 80" region="us-west-2" source="terraform" vpc="vpc-0a1b2c3d4e5f60001" id="sg-0a1b2c3d4e5f60061">
+          <mxCell parent="awskit-layer-sgs" style="rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=56;spacingTop=13;spacingRight=12;spacingBottom=0;" vertex="1">
+            <mxGeometry height="60" width="260" x="100" y="960" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;Security group&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; sg-0a1b2c3d4e5f60061&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Description:&lt;/b&gt; Web traffic to the load balancer&lt;br&gt;&lt;b&gt;In:&lt;/b&gt; tcp 443 from 0.0.0.0/0&lt;br&gt;&lt;b&gt;In:&lt;/b&gt; tcp 80 from 0.0.0.0/0" placeholders="1" aws_id="sg-0a1b2c3d4e5f60061" awskit="1" role="icon" id="sg-0a1b2c3d4e5f60061#icon">
+          <mxCell parent="sg-0a1b2c3d4e5f60061" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.security_group;fillColor=#DD344C;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="32" width="32" x="12" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;lab-app&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;1 inbound rule&lt;/span&gt;" tooltip="&lt;b&gt;Security group&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; sg-0a1b2c3d4e5f60062&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Description:&lt;/b&gt; App servers&lt;br&gt;&lt;b&gt;In:&lt;/b&gt; tcp 8080 from sg-0a1b2c3d4e5f60061" placeholders="1" account="222222222222" aws_id="sg-0a1b2c3d4e5f60062" awskit="1" awskit_geo="380,960,260,60" awskit_in="vpc-0a1b2c3d4e5f60001" awskit_lh="8792ebe8" awskit_sh="6ad7162a" description="App servers" egress="[{&quot;cidrs&quot;:[&quot;0.0.0.0/0&quot;],&quot;description&quot;:&quot;&quot;,&quot;from&quot;:0,&quot;groups&quot;:[],&quot;protocol&quot;:&quot;-1&quot;,&quot;to&quot;:0}]" ingress="[{&quot;cidrs&quot;:[],&quot;description&quot;:&quot;&quot;,&quot;from&quot;:8080,&quot;groups&quot;:[&quot;sg-0a1b2c3d4e5f60061&quot;],&quot;protocol&quot;:&quot;tcp&quot;,&quot;to&quot;:8080}]" kind="sg" name="lab-app" region="us-west-2" source="terraform" vpc="vpc-0a1b2c3d4e5f60001" id="sg-0a1b2c3d4e5f60062">
+          <mxCell parent="awskit-layer-sgs" style="rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=56;spacingTop=13;spacingRight=12;spacingBottom=0;" vertex="1">
+            <mxGeometry height="60" width="260" x="380" y="960" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;Security group&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; sg-0a1b2c3d4e5f60062&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Description:&lt;/b&gt; App servers&lt;br&gt;&lt;b&gt;In:&lt;/b&gt; tcp 8080 from sg-0a1b2c3d4e5f60061" placeholders="1" aws_id="sg-0a1b2c3d4e5f60062" awskit="1" role="icon" id="sg-0a1b2c3d4e5f60062#icon">
+          <mxCell parent="sg-0a1b2c3d4e5f60062" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.security_group;fillColor=#DD344C;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="32" width="32" x="12" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;lab-bastion&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;22 SSH open to the internet&lt;/span&gt;" tooltip="&lt;b&gt;Security group&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; sg-0a1b2c3d4e5f60063&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Description:&lt;/b&gt; SSH to the bastion&lt;br&gt;&lt;b&gt;In:&lt;/b&gt; tcp 22 from 0.0.0.0/0&lt;br&gt;&lt;b&gt;Problem (high):&lt;/b&gt; Open to the internet: 22 SSH from 0.0.0.0/0" placeholders="1" account="222222222222" aws_id="sg-0a1b2c3d4e5f60063" awskit="1" awskit_geo="660,960,260,60" awskit_in="vpc-0a1b2c3d4e5f60001" awskit_lh="0bb37135" awskit_sh="6ad7162a" description="SSH to the bastion" egress="[{&quot;cidrs&quot;:[&quot;0.0.0.0/0&quot;],&quot;description&quot;:&quot;&quot;,&quot;from&quot;:0,&quot;groups&quot;:[],&quot;protocol&quot;:&quot;-1&quot;,&quot;to&quot;:0}]" flags="high: Open to the internet: 22 SSH from 0.0.0.0/0" ingress="[{&quot;cidrs&quot;:[&quot;0.0.0.0/0&quot;],&quot;description&quot;:&quot;temporary&quot;,&quot;from&quot;:22,&quot;groups&quot;:[],&quot;protocol&quot;:&quot;tcp&quot;,&quot;to&quot;:22}]" kind="sg" name="lab-bastion" open_to_internet="22 SSH" region="us-west-2" source="terraform" vpc="vpc-0a1b2c3d4e5f60001" id="sg-0a1b2c3d4e5f60063">
+          <mxCell parent="awskit-layer-sgs" style="rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=56;spacingTop=13;spacingRight=12;spacingBottom=0;" vertex="1">
+            <mxGeometry height="60" width="260" x="660" y="960" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;Security group&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; sg-0a1b2c3d4e5f60063&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Description:&lt;/b&gt; SSH to the bastion&lt;br&gt;&lt;b&gt;In:&lt;/b&gt; tcp 22 from 0.0.0.0/0&lt;br&gt;&lt;b&gt;Problem (high):&lt;/b&gt; Open to the internet: 22 SSH from 0.0.0.0/0" placeholders="1" aws_id="sg-0a1b2c3d4e5f60063" awskit="1" role="icon" id="sg-0a1b2c3d4e5f60063#icon">
+          <mxCell parent="sg-0a1b2c3d4e5f60063" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.security_group;fillColor=#DD344C;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="32" width="32" x="12" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;lab-db&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;1 inbound rule&lt;/span&gt;" tooltip="&lt;b&gt;Security group&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; sg-0a1b2c3d4e5f60064&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Description:&lt;/b&gt; Postgres from the app&lt;br&gt;&lt;b&gt;In:&lt;/b&gt; tcp 5432 from sg-0a1b2c3d4e5f60062" placeholders="1" account="222222222222" aws_id="sg-0a1b2c3d4e5f60064" awskit="1" awskit_geo="100,1040,260,60" awskit_in="vpc-0a1b2c3d4e5f60001" awskit_lh="1d76a48f" awskit_sh="6ad7162a" description="Postgres from the app" egress="[{&quot;cidrs&quot;:[&quot;0.0.0.0/0&quot;],&quot;description&quot;:&quot;&quot;,&quot;from&quot;:0,&quot;groups&quot;:[],&quot;protocol&quot;:&quot;-1&quot;,&quot;to&quot;:0}]" ingress="[{&quot;cidrs&quot;:[],&quot;description&quot;:&quot;&quot;,&quot;from&quot;:5432,&quot;groups&quot;:[&quot;sg-0a1b2c3d4e5f60062&quot;],&quot;protocol&quot;:&quot;tcp&quot;,&quot;to&quot;:5432}]" kind="sg" name="lab-db" region="us-west-2" source="terraform" vpc="vpc-0a1b2c3d4e5f60001" id="sg-0a1b2c3d4e5f60064">
+          <mxCell parent="awskit-layer-sgs" style="rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=56;spacingTop=13;spacingRight=12;spacingBottom=0;" vertex="1">
+            <mxGeometry height="60" width="260" x="100" y="1040" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;Security group&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; sg-0a1b2c3d4e5f60064&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Description:&lt;/b&gt; Postgres from the app&lt;br&gt;&lt;b&gt;In:&lt;/b&gt; tcp 5432 from sg-0a1b2c3d4e5f60062" placeholders="1" aws_id="sg-0a1b2c3d4e5f60064" awskit="1" role="icon" id="sg-0a1b2c3d4e5f60064#icon">
+          <mxCell parent="sg-0a1b2c3d4e5f60064" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.security_group;fillColor=#DD344C;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="32" width="32" x="12" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;lab-app allows tcp 8080 from lab-alb&lt;/b&gt;&lt;br&gt;&lt;b&gt;Ports:&lt;/b&gt; tcp 8080" placeholders="1" aws_dst="sg-0a1b2c3d4e5f60062" aws_src="sg-0a1b2c3d4e5f60061" awskit="1" awskit_pts="" awskit_sh="8a9c9e34" kind="sg-reference" id="sg-reference:sg-0a1b2c3d4e5f60061-&gt;sg-0a1b2c3d4e5f60062">
+          <mxCell edge="1" parent="awskit-layer-sgs" source="sg-0a1b2c3d4e5f60061" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=16;html=1;orthogonalLoop=1;jettySize=auto;strokeColor=#EF9F27;strokeWidth=1.25;dashed=0;endArrow=block;endFill=1;endSize=6;startArrow=none;fontFamily=Helvetica;fontSize=10;fontColor=#EF9F27;labelBackgroundColor=#1F1F1E;exitX=1;exitY=0.5;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" target="sg-0a1b2c3d4e5f60062">
+            <mxGeometry relative="1" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;lab-db allows tcp 5432 from lab-app&lt;/b&gt;&lt;br&gt;&lt;b&gt;Ports:&lt;/b&gt; tcp 5432" placeholders="1" aws_dst="sg-0a1b2c3d4e5f60064" aws_src="sg-0a1b2c3d4e5f60062" awskit="1" awskit_pts="370,990 370,1070" awskit_sh="69c9c6f6" kind="sg-reference" id="sg-reference:sg-0a1b2c3d4e5f60062-&gt;sg-0a1b2c3d4e5f60064">
+          <mxCell edge="1" parent="awskit-layer-sgs" source="sg-0a1b2c3d4e5f60062" style="edgeStyle=orthogonalEdgeStyle;rounded=1;arcSize=16;html=1;orthogonalLoop=1;jettySize=auto;strokeColor=#EF9F27;strokeWidth=1.25;dashed=0;endArrow=block;endFill=1;endSize=6;startArrow=none;fontFamily=Helvetica;fontSize=10;fontColor=#EF9F27;labelBackgroundColor=#1F1F1E;exitX=0;exitY=0.5;exitDx=0;exitDy=0;exitPerimeter=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" target="sg-0a1b2c3d4e5f60064">
+            <mxGeometry relative="1" as="geometry">
+              <Array as="points">
+                <mxPoint x="370" y="990" />
+                <mxPoint x="370" y="1070" />
+              </Array>
+            </mxGeometry>
+          </mxCell>
+        </UserObject>
+        <mxCell id="strip:vpc-0a1b2c3d4e5f60001:sgs" parent="awskit-layer-sgs" style="fillColor=none;strokeColor=none;html=1;align=left;verticalAlign=middle;whiteSpace=nowrap;fontFamily=Helvetica;fontSize=11;fontStyle=1;fontColor=#B4B2A9;spacing=0;spacingLeft=2;" value="Security groups and network ACLs" vertex="1">
+          <mxGeometry height="24" width="820" x="100" y="930" as="geometry" />
+        </mxCell>
+        <mxCell id="awskit-layer-endpoints" parent="0" value="Endpoints" />
+        <UserObject label="&lt;b&gt;S3&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;Gateway endpoint&lt;/span&gt;" tooltip="&lt;b&gt;VPC endpoint&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; vpce-0a1b2c3d4e5f60081&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Type:&lt;/b&gt; Gateway&lt;br&gt;&lt;b&gt;Service:&lt;/b&gt; com.amazonaws.us-west-2.s3" placeholders="1" account="222222222222" aws_id="vpce-0a1b2c3d4e5f60081" awskit="1" awskit_geo="100,850,260,60" awskit_in="vpc-0a1b2c3d4e5f60001" awskit_lh="4af28e4c" awskit_sh="6ad7162a" kind="endpoint" region="us-west-2" route_tables="rtb-0a1b2c3d4e5f60052" service="com.amazonaws.us-west-2.s3" source="terraform" type="Gateway" vpc="vpc-0a1b2c3d4e5f60001" id="vpce-0a1b2c3d4e5f60081">
+          <mxCell parent="awskit-layer-endpoints" style="rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=56;spacingTop=13;spacingRight=12;spacingBottom=0;" vertex="1">
+            <mxGeometry height="60" width="260" x="100" y="850" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;VPC endpoint&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; vpce-0a1b2c3d4e5f60081&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Type:&lt;/b&gt; Gateway&lt;br&gt;&lt;b&gt;Service:&lt;/b&gt; com.amazonaws.us-west-2.s3" placeholders="1" aws_id="vpce-0a1b2c3d4e5f60081" awskit="1" role="icon" id="vpce-0a1b2c3d4e5f60081#icon">
+          <mxCell parent="vpce-0a1b2c3d4e5f60081" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.endpoints;fillColor=#8C4FFF;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="32" width="32" x="12" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="&lt;b&gt;SSM&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:11px;color:#B4B2A9;font-weight:normal&quot;&gt;Interface endpoint, 2 subnets&lt;/span&gt;" tooltip="&lt;b&gt;VPC endpoint&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; vpce-0a1b2c3d4e5f60082&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Type:&lt;/b&gt; Interface&lt;br&gt;&lt;b&gt;Service:&lt;/b&gt; com.amazonaws.us-west-2.ssm" placeholders="1" account="222222222222" aws_id="vpce-0a1b2c3d4e5f60082" awskit="1" awskit_geo="380,850,260,60" awskit_in="vpc-0a1b2c3d4e5f60001" awskit_lh="93f7e904" awskit_sh="6ad7162a" kind="endpoint" region="us-west-2" service="com.amazonaws.us-west-2.ssm" source="terraform" subnets="subnet-0a1b2c3d4e5f60021, subnet-0a1b2c3d4e5f60022" type="Interface" vpc="vpc-0a1b2c3d4e5f60001" id="vpce-0a1b2c3d4e5f60082">
+          <mxCell parent="awskit-layer-endpoints" style="rounded=1;arcSize=10;absoluteArcSize=1;fillColor=#202020;strokeColor=#444441;dashed=0;container=1;collapsible=0;dropTarget=0;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontColor=#F1EFE8;align=left;verticalAlign=top;spacing=0;spacingLeft=56;spacingTop=13;spacingRight=12;spacingBottom=0;" vertex="1">
+            <mxGeometry height="60" width="260" x="380" y="850" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" tooltip="&lt;b&gt;VPC endpoint&lt;/b&gt;&lt;br&gt;&lt;b&gt;ID:&lt;/b&gt; vpce-0a1b2c3d4e5f60082&lt;br&gt;&lt;b&gt;Account:&lt;/b&gt; 222222222222&lt;br&gt;&lt;b&gt;Region:&lt;/b&gt; us-west-2&lt;br&gt;&lt;b&gt;Type:&lt;/b&gt; Interface&lt;br&gt;&lt;b&gt;Service:&lt;/b&gt; com.amazonaws.us-west-2.ssm" placeholders="1" aws_id="vpce-0a1b2c3d4e5f60082" awskit="1" role="icon" id="vpce-0a1b2c3d4e5f60082#icon">
+          <mxCell parent="vpce-0a1b2c3d4e5f60082" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.endpoints;fillColor=#8C4FFF;strokeColor=#FFFFFF;gradientColor=none;html=1;movable=0;resizable=0;rotatable=0;deletable=0;editable=0;connectable=0;aspect=fixed;" vertex="1">
+            <mxGeometry height="32" width="32" x="12" y="14" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <mxCell id="strip:vpc-0a1b2c3d4e5f60001:endpoints" parent="awskit-layer-endpoints" style="fillColor=none;strokeColor=none;html=1;align=left;verticalAlign=middle;whiteSpace=nowrap;fontFamily=Helvetica;fontSize=11;fontStyle=1;fontColor=#B4B2A9;spacing=0;spacingLeft=2;" value="VPC endpoints" vertex="1">
+          <mxGeometry height="24" width="820" x="100" y="820" as="geometry" />
+        </mxCell>
+        <mxCell id="awskit-layer-flags" parent="0" value="Flags" />
+        <UserObject label="" placeholders="1" aws_id="i-0a1b2c3d4e5f60093" awskit="1" role="flag-outline" id="i-0a1b2c3d4e5f60093#flag">
+          <mxCell parent="awskit-layer-flags" style="rounded=1;arcSize=12;absoluteArcSize=1;fillColor=none;strokeColor=#E24B4A;strokeWidth=2.5;pointerEvents=0;movable=0;resizable=0;editable=0;connectable=0;" vertex="1">
+            <mxGeometry height="68" width="328" x="136" y="376" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="!" tooltip="&lt;b&gt;Security problem&lt;/b&gt;&lt;br&gt;&lt;b&gt;High:&lt;/b&gt; IMDSv1 allowed: instance metadata answers without a token, and the instance has a public IP&lt;br&gt;&lt;b&gt;High:&lt;/b&gt; Public IP and a security group open to the internet (sg-0a1b2c3d4e5f60063)" placeholders="1" aws_id="i-0a1b2c3d4e5f60093" awskit="1" flags="high: IMDSv1 allowed: instance metadata answers without a token, and the instance has a public IP; high: Public IP and a security group open to the internet (sg-0a1b2c3d4e5f60063)" role="flag-badge" id="i-0a1b2c3d4e5f60093#badge">
+          <mxCell parent="awskit-layer-flags" style="shape=ellipse;fillColor=#E24B4A;strokeColor=none;fontColor=#FFFFFF;fontStyle=1;fontSize=12;fontFamily=Helvetica;align=center;verticalAlign=middle;html=1;resizable=0;editable=0;connectable=0;" vertex="1">
+            <mxGeometry height="20" width="20" x="448" y="372" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="" placeholders="1" aws_id="sg-0a1b2c3d4e5f60063" awskit="1" role="flag-outline" id="sg-0a1b2c3d4e5f60063#flag">
+          <mxCell parent="awskit-layer-flags" style="rounded=1;arcSize=12;absoluteArcSize=1;fillColor=none;strokeColor=#E24B4A;strokeWidth=2.5;pointerEvents=0;movable=0;resizable=0;editable=0;connectable=0;" vertex="1">
+            <mxGeometry height="68" width="268" x="656" y="956" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <UserObject label="!" tooltip="&lt;b&gt;Security problem&lt;/b&gt;&lt;br&gt;&lt;b&gt;High:&lt;/b&gt; Open to the internet: 22 SSH from 0.0.0.0/0" placeholders="1" aws_id="sg-0a1b2c3d4e5f60063" awskit="1" flags="high: Open to the internet: 22 SSH from 0.0.0.0/0" role="flag-badge" id="sg-0a1b2c3d4e5f60063#badge">
+          <mxCell parent="awskit-layer-flags" style="shape=ellipse;fillColor=#E24B4A;strokeColor=none;fontColor=#FFFFFF;fontStyle=1;fontSize=12;fontFamily=Helvetica;align=center;verticalAlign=middle;html=1;resizable=0;editable=0;connectable=0;" vertex="1">
+            <mxGeometry height="20" width="20" x="908" y="952" as="geometry" />
+          </mxCell>
+        </UserObject>
+        <mxCell id="awskit-layer-legend" parent="0" value="Legend" />
+        <mxCell id="legend:route:sample" edge="1" parent="awskit-layer-legend" style="html=1;strokeColor=#9D6BFF;strokeWidth=1.25;dashed=0;endArrow=block;endFill=1;endSize=5;startArrow=none;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="40" y="1210" as="sourcePoint" />
+            <mxPoint x="80" y="1210" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend:route:text" parent="awskit-layer-legend" style="fillColor=none;strokeColor=none;html=1;align=left;verticalAlign=middle;whiteSpace=nowrap;fontFamily=Helvetica;fontSize=12;fontColor=#C2C0B6;spacing=0;" value="Route, labeled with its destination" vertex="1">
+          <mxGeometry height="20" width="320" x="92" y="1200" as="geometry" />
+        </mxCell>
+        <mxCell id="legend:sg-reference:sample" edge="1" parent="awskit-layer-legend" style="html=1;strokeColor=#EF9F27;strokeWidth=1.25;dashed=0;endArrow=block;endFill=1;endSize=5;startArrow=none;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="420" y="1210" as="sourcePoint" />
+            <mxPoint x="460" y="1210" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend:sg-reference:text" parent="awskit-layer-legend" style="fillColor=none;strokeColor=none;html=1;align=left;verticalAlign=middle;whiteSpace=nowrap;fontFamily=Helvetica;fontSize=12;fontColor=#C2C0B6;spacing=0;" value="Security group allows traffic from another group" vertex="1">
+          <mxGeometry height="20" width="320" x="472" y="1200" as="geometry" />
+        </mxCell>
+        <mxCell id="legend:flag:sample" parent="awskit-layer-legend" style="rounded=1;arcSize=6;absoluteArcSize=1;fillColor=none;strokeColor=#E24B4A;strokeWidth=2.5;" value="" vertex="1">
+          <mxGeometry height="16" width="40" x="40" y="1232" as="geometry" />
+        </mxCell>
+        <mxCell id="legend:flag:text" parent="awskit-layer-legend" style="fillColor=none;strokeColor=none;html=1;align=left;verticalAlign=middle;whiteSpace=nowrap;fontFamily=Helvetica;fontSize=12;fontColor=#C2C0B6;spacing=0;" value="Security problem, hover the red badge for why" vertex="1">
+          <mxGeometry height="20" width="320" x="92" y="1230" as="geometry" />
+        </mxCell>
+        <mxCell id="footnote" parent="awskit-layer-legend" style="fillColor=none;strokeColor=none;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontFamily=Helvetica;fontSize=11;fontColor=#8A887F;spacing=0;" value="Source: Terraform state (two-az-vpc-state.json)&lt;br&gt;Not drawn from Terraform: 1 aws_eip" vertex="1">
+          <mxGeometry height="40" width="940" x="40" y="1280" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

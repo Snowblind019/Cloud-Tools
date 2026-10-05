@@ -1,0 +1,471 @@
+{
+  "format_version": "1.0",
+  "terraform_version": "1.9.8",
+  "values": {
+    "root_module": {
+      "child_modules": [
+        {
+          "address": "module.lab",
+          "resources": [
+            {
+              "address": "module.lab.aws_iam_openid_connect_provider.github",
+              "mode": "managed",
+              "name": "github",
+              "provider_name": "registry.terraform.io/hashicorp/aws",
+              "schema_version": 0,
+              "sensitive_values": {},
+              "type": "aws_iam_openid_connect_provider",
+              "values": {
+                "arn": "arn:aws:iam::222222222222:oidc-provider/token.actions.githubusercontent.com",
+                "client_id_list": [
+                  "sts.amazonaws.com"
+                ],
+                "id": "arn:aws:iam::222222222222:oidc-provider/token.actions.githubusercontent.com",
+                "tags": {},
+                "thumbprint_list": [],
+                "url": "token.actions.githubusercontent.com"
+              }
+            },
+            {
+              "address": "module.lab.aws_iam_role.gha_ephemeral_check",
+              "mode": "managed",
+              "name": "gha_ephemeral_check",
+              "provider_name": "registry.terraform.io/hashicorp/aws",
+              "schema_version": 0,
+              "sensitive_values": {},
+              "type": "aws_iam_role",
+              "values": {
+                "arn": "arn:aws:iam::222222222222:role/gha-ephemeral-check",
+                "assume_role_policy": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Principal\": {\"Federated\": \"arn:aws:iam::222222222222:oidc-provider/token.actions.githubusercontent.com\"}, \"Action\": \"sts:AssumeRoleWithWebIdentity\", \"Condition\": {\"StringEquals\": {\"token.actions.githubusercontent.com:aud\": \"sts.amazonaws.com\"}, \"StringLike\": {\"token.actions.githubusercontent.com:sub\": \"repo:Snowblind019/aws-platform:ref:refs/heads/main\"}}}]}",
+                "description": "",
+                "id": "gha-ephemeral-check",
+                "managed_policy_arns": [],
+                "name": "gha-ephemeral-check",
+                "path": "/",
+                "tags": {}
+              }
+            },
+            {
+              "address": "module.lab.aws_iam_role_policy_attachment.gha_readonly",
+              "mode": "managed",
+              "name": "gha_readonly",
+              "provider_name": "registry.terraform.io/hashicorp/aws",
+              "schema_version": 0,
+              "sensitive_values": {},
+              "type": "aws_iam_role_policy_attachment",
+              "values": {
+                "id": "gha-ephemeral-check-ro",
+                "policy_arn": "arn:aws:iam::aws:policy/ReadOnlyAccess",
+                "role": "gha-ephemeral-check"
+              }
+            },
+            {
+              "address": "module.lab.aws_s3_bucket.tf_state",
+              "mode": "managed",
+              "name": "tf_state",
+              "provider_name": "registry.terraform.io/hashicorp/aws",
+              "schema_version": 0,
+              "sensitive_values": {},
+              "type": "aws_s3_bucket",
+              "values": {
+                "arn": "arn:aws:s3:::snowy-lab-tfstate",
+                "bucket": "snowy-lab-tfstate",
+                "id": "snowy-lab-tfstate",
+                "region": "us-west-2",
+                "tags": {
+                  "Description": "State for all three stacks"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "resources": [
+        {
+          "address": "aws_organizations_organization.this",
+          "mode": "managed",
+          "name": "this",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_organizations_organization",
+          "values": {
+            "accounts": [
+              {
+                "arn": "arn:aws:organizations::111111111111:account/o-a1b2c3d4e5/111111111111",
+                "email": "aws-mgmt@example.com",
+                "id": "111111111111",
+                "name": "management",
+                "status": "ACTIVE"
+              },
+              {
+                "arn": "arn:aws:organizations::111111111111:account/o-a1b2c3d4e5/222222222222",
+                "email": "aws-lab@example.com",
+                "id": "222222222222",
+                "name": "lab",
+                "status": "ACTIVE"
+              }
+            ],
+            "arn": "arn:aws:organizations::111111111111:organization/o-a1b2c3d4e5",
+            "aws_service_access_principals": [
+              "cloudtrail.amazonaws.com",
+              "sso.amazonaws.com"
+            ],
+            "enabled_policy_types": [
+              "SERVICE_CONTROL_POLICY"
+            ],
+            "feature_set": "ALL",
+            "id": "o-a1b2c3d4e5",
+            "master_account_email": "aws-mgmt@example.com",
+            "master_account_id": "111111111111",
+            "roots": [
+              {
+                "arn": "arn:aws:organizations::111111111111:root/o-a1b2c3d4e5/r-ab12",
+                "id": "r-ab12",
+                "name": "Root",
+                "policy_types": [
+                  {
+                    "status": "ENABLED",
+                    "type": "SERVICE_CONTROL_POLICY"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "address": "aws_organizations_organizational_unit.workloads",
+          "mode": "managed",
+          "name": "workloads",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_organizations_organizational_unit",
+          "values": {
+            "arn": "arn:aws:organizations::111111111111:ou/o-a1b2c3d4e5/ou-ab12-wk7q2d9x",
+            "id": "ou-ab12-wk7q2d9x",
+            "name": "Workloads",
+            "parent_id": "r-ab12",
+            "tags": {}
+          }
+        },
+        {
+          "address": "aws_organizations_account.lab",
+          "mode": "managed",
+          "name": "lab",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_organizations_account",
+          "values": {
+            "arn": "arn:aws:organizations::111111111111:account/o-a1b2c3d4e5/222222222222",
+            "email": "aws-lab@example.com",
+            "id": "222222222222",
+            "name": "lab",
+            "parent_id": "ou-ab12-wk7q2d9x",
+            "role_name": "OrganizationAccountAccessRole",
+            "status": "ACTIVE",
+            "tags": {
+              "Description": "Every project deploys here"
+            }
+          }
+        },
+        {
+          "address": "aws_organizations_policy.deny_leave_org",
+          "mode": "managed",
+          "name": "deny_leave_org",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_organizations_policy",
+          "values": {
+            "arn": "arn:aws:organizations::111111111111:policy/o-a1b2c3d4e5/service_control_policy/p-aaaa1111",
+            "content": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Deny\", \"Action\": \"organizations:LeaveOrganization\", \"Resource\": \"*\"}]}",
+            "id": "p-aaaa1111",
+            "name": "deny-leave-org",
+            "type": "SERVICE_CONTROL_POLICY"
+          }
+        },
+        {
+          "address": "aws_organizations_policy_attachment.deny_leave_org",
+          "mode": "managed",
+          "name": "deny_leave_org",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_organizations_policy_attachment",
+          "values": {
+            "id": "ou-ab12-wk7q2d9x:p-aaaa1111",
+            "policy_id": "p-aaaa1111",
+            "target_id": "ou-ab12-wk7q2d9x"
+          }
+        },
+        {
+          "address": "aws_organizations_policy.region_lock",
+          "mode": "managed",
+          "name": "region_lock",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_organizations_policy",
+          "values": {
+            "arn": "arn:aws:organizations::111111111111:policy/o-a1b2c3d4e5/service_control_policy/p-bbbb2222",
+            "content": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Deny\", \"NotAction\": [\"iam:*\", \"organizations:*\", \"sts:*\", \"support:*\", \"budgets:*\", \"ce:*\"], \"Resource\": \"*\", \"Condition\": {\"StringNotEquals\": {\"aws:RequestedRegion\": [\"us-west-2\", \"us-east-1\"]}}}]}",
+            "id": "p-bbbb2222",
+            "name": "region-lock",
+            "type": "SERVICE_CONTROL_POLICY"
+          }
+        },
+        {
+          "address": "aws_organizations_policy_attachment.region_lock",
+          "mode": "managed",
+          "name": "region_lock",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_organizations_policy_attachment",
+          "values": {
+            "id": "ou-ab12-wk7q2d9x:p-bbbb2222",
+            "policy_id": "p-bbbb2222",
+            "target_id": "ou-ab12-wk7q2d9x"
+          }
+        },
+        {
+          "address": "aws_organizations_policy.no_long_lived_keys",
+          "mode": "managed",
+          "name": "no_long_lived_keys",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_organizations_policy",
+          "values": {
+            "arn": "arn:aws:organizations::111111111111:policy/o-a1b2c3d4e5/service_control_policy/p-cccc3333",
+            "content": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Deny\", \"Action\": [\"iam:CreateAccessKey\", \"iam:CreateUser\"], \"Resource\": \"*\"}]}",
+            "id": "p-cccc3333",
+            "name": "no-long-lived-keys",
+            "type": "SERVICE_CONTROL_POLICY"
+          }
+        },
+        {
+          "address": "aws_organizations_policy_attachment.no_long_lived_keys",
+          "mode": "managed",
+          "name": "no_long_lived_keys",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_organizations_policy_attachment",
+          "values": {
+            "id": "ou-ab12-wk7q2d9x:p-cccc3333",
+            "policy_id": "p-cccc3333",
+            "target_id": "ou-ab12-wk7q2d9x"
+          }
+        },
+        {
+          "address": "aws_ssoadmin_permission_set.admin",
+          "mode": "managed",
+          "name": "admin",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_ssoadmin_permission_set",
+          "values": {
+            "arn": "arn:aws:sso:::permissionSet/ssoins-7907a1b2c3d4e5f6/ps-1a2b3c4d5e6f7a8b",
+            "description": "Full access for lab work",
+            "id": "arn:aws:sso:::permissionSet/ssoins-7907a1b2c3d4e5f6/ps-1a2b3c4d5e6f7a8b,arn:aws:sso:::instance/ssoins-7907a1b2c3d4e5f6",
+            "instance_arn": "arn:aws:sso:::instance/ssoins-7907a1b2c3d4e5f6",
+            "name": "AdministratorAccess",
+            "session_duration": "PT4H"
+          }
+        },
+        {
+          "address": "aws_ssoadmin_permission_set.readonly",
+          "mode": "managed",
+          "name": "readonly",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_ssoadmin_permission_set",
+          "values": {
+            "arn": "arn:aws:sso:::permissionSet/ssoins-7907a1b2c3d4e5f6/ps-9c8d7e6f5a4b3c2d",
+            "description": "",
+            "id": "arn:aws:sso:::permissionSet/ssoins-7907a1b2c3d4e5f6/ps-9c8d7e6f5a4b3c2d,arn:aws:sso:::instance/ssoins-7907a1b2c3d4e5f6",
+            "instance_arn": "arn:aws:sso:::instance/ssoins-7907a1b2c3d4e5f6",
+            "name": "ReadOnly",
+            "session_duration": "PT8H"
+          }
+        },
+        {
+          "address": "aws_ssoadmin_managed_policy_attachment.admin",
+          "mode": "managed",
+          "name": "admin",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_ssoadmin_managed_policy_attachment",
+          "values": {
+            "id": "x",
+            "instance_arn": "arn:aws:sso:::instance/ssoins-7907a1b2c3d4e5f6",
+            "managed_policy_arn": "arn:aws:iam::aws:policy/AdministratorAccess",
+            "managed_policy_name": "AdministratorAccess",
+            "permission_set_arn": "arn:aws:sso:::permissionSet/ssoins-7907a1b2c3d4e5f6/ps-1a2b3c4d5e6f7a8b"
+          }
+        },
+        {
+          "address": "aws_ssoadmin_managed_policy_attachment.readonly",
+          "mode": "managed",
+          "name": "readonly",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_ssoadmin_managed_policy_attachment",
+          "values": {
+            "id": "y",
+            "instance_arn": "arn:aws:sso:::instance/ssoins-7907a1b2c3d4e5f6",
+            "managed_policy_arn": "arn:aws:iam::aws:policy/ReadOnlyAccess",
+            "managed_policy_name": "ReadOnlyAccess",
+            "permission_set_arn": "arn:aws:sso:::permissionSet/ssoins-7907a1b2c3d4e5f6/ps-9c8d7e6f5a4b3c2d"
+          }
+        },
+        {
+          "address": "aws_identitystore_user.snowy",
+          "mode": "managed",
+          "name": "snowy",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_identitystore_user",
+          "values": {
+            "display_name": "Snowy",
+            "id": "d-9267a1b2c3/9067e1a2-5b3c-4d1e-8f90-a1b2c3d4e5f6",
+            "identity_store_id": "d-9267a1b2c3",
+            "user_id": "9067e1a2-5b3c-4d1e-8f90-a1b2c3d4e5f6",
+            "user_name": "snowy"
+          }
+        },
+        {
+          "address": "aws_ssoadmin_account_assignment.lab_admin",
+          "mode": "managed",
+          "name": "lab_admin",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_ssoadmin_account_assignment",
+          "values": {
+            "id": "z",
+            "instance_arn": "arn:aws:sso:::instance/ssoins-7907a1b2c3d4e5f6",
+            "permission_set_arn": "arn:aws:sso:::permissionSet/ssoins-7907a1b2c3d4e5f6/ps-1a2b3c4d5e6f7a8b",
+            "principal_id": "9067e1a2-5b3c-4d1e-8f90-a1b2c3d4e5f6",
+            "principal_type": "USER",
+            "target_id": "222222222222",
+            "target_type": "AWS_ACCOUNT"
+          }
+        },
+        {
+          "address": "aws_ssoadmin_account_assignment.lab_readonly",
+          "mode": "managed",
+          "name": "lab_readonly",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_ssoadmin_account_assignment",
+          "values": {
+            "id": "w",
+            "instance_arn": "arn:aws:sso:::instance/ssoins-7907a1b2c3d4e5f6",
+            "permission_set_arn": "arn:aws:sso:::permissionSet/ssoins-7907a1b2c3d4e5f6/ps-9c8d7e6f5a4b3c2d",
+            "principal_id": "9067e1a2-5b3c-4d1e-8f90-a1b2c3d4e5f6",
+            "principal_type": "USER",
+            "target_id": "222222222222",
+            "target_type": "AWS_ACCOUNT"
+          }
+        },
+        {
+          "address": "aws_cloudtrail.org",
+          "mode": "managed",
+          "name": "org",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_cloudtrail",
+          "values": {
+            "arn": "arn:aws:cloudtrail:us-west-2:111111111111:trail/org-trail",
+            "enable_log_file_validation": true,
+            "home_region": "us-west-2",
+            "id": "arn:aws:cloudtrail:us-west-2:111111111111:trail/org-trail",
+            "is_multi_region_trail": true,
+            "is_organization_trail": true,
+            "name": "org-trail",
+            "s3_bucket_name": "snowy-org-cloudtrail-logs"
+          }
+        },
+        {
+          "address": "aws_s3_bucket.trail_logs",
+          "mode": "managed",
+          "name": "trail_logs",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_s3_bucket",
+          "values": {
+            "arn": "arn:aws:s3:::snowy-org-cloudtrail-logs",
+            "bucket": "snowy-org-cloudtrail-logs",
+            "id": "snowy-org-cloudtrail-logs",
+            "region": "us-west-2",
+            "tags": {}
+          }
+        },
+        {
+          "address": "aws_budgets_budget.monthly",
+          "mode": "managed",
+          "name": "monthly",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_budgets_budget",
+          "values": {
+            "account_id": "111111111111",
+            "budget_type": "COST",
+            "id": "111111111111:monthly-cost",
+            "limit_amount": "20.0",
+            "limit_unit": "USD",
+            "name": "monthly-cost",
+            "time_unit": "MONTHLY"
+          }
+        },
+        {
+          "address": "aws_budgets_budget.daily",
+          "mode": "managed",
+          "name": "daily",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_budgets_budget",
+          "values": {
+            "account_id": "111111111111",
+            "budget_type": "COST",
+            "id": "111111111111:daily-spike",
+            "limit_amount": "3.0",
+            "limit_unit": "USD",
+            "name": "daily-spike",
+            "time_unit": "DAILY"
+          }
+        },
+        {
+          "address": "aws_ce_anomaly_monitor.services",
+          "mode": "managed",
+          "name": "services",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "sensitive_values": {},
+          "type": "aws_ce_anomaly_monitor",
+          "values": {
+            "arn": "arn:aws:ce::111111111111:anomalymonitor/1a2b3c4d-1111-2222-3333-444455556666",
+            "id": "arn:aws:ce::111111111111:anomalymonitor/1a2b3c4d-1111-2222-3333-444455556666",
+            "monitor_dimension": "SERVICE",
+            "monitor_type": "DIMENSIONAL",
+            "name": "services"
+          }
+        }
+      ]
+    }
+  }
+}

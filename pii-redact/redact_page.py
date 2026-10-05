@@ -4,7 +4,7 @@ from __future__ import annotations
 from gi.repository import Gio, GLib, Gtk, Pango
 
 from . import redact
-from .widgets import Page, button, hbox, label, margins, set_clipboard, vbox
+from .widgets import Page, button, hbox, label, margins, run_bg, set_clipboard, vbox
 
 HIGHLIGHT = "rgba(230,160,0,0.35)"
 
@@ -226,7 +226,12 @@ class RedactView(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self._pending = 0
         self._copy_after_run = False
+        self._copy_when_ready = False
         self._settings_win = None
+        # Redacting runs in the background. _gen goes up on every edit or settings change,
+        # so a result that finishes after a newer change is thrown away and redone.
+        self._gen = 0
+        self._busy = False
 
         paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         paned.set_vexpand(True)
@@ -311,8 +316,10 @@ class RedactView(Gtk.Box):
         self.in_buf.set_text(text)
 
     def schedule(self, *_):
-        # A run is already queued and will read the latest text and settings when it fires.
-        if not self._pending:
+        self._gen += 1
+        # A queued run reads the latest text and settings when it fires, and a run that's
+        # already going starts again when it finishes.
+        if not self._pending and not self._busy:
             self._pending = GLib.timeout_add(120, self._run)
 
     def _run(self):
@@ -324,7 +331,30 @@ class RedactView(Gtk.Box):
             self.numbered.handler_unblock(self._num_handler)
         text = self.in_buf.get_text(self.in_buf.get_start_iter(), self.in_buf.get_end_iter(),
                                     False)
-        out, counts, ranges = redact.redact(text, redact.options_from(cfg))
+        opts = redact.options_from(cfg)
+        gen = self._gen
+        self._busy = True
+        # Big pastes take a moment, so the work happens off the main loop to keep the
+        # window responsive
+        run_bg(lambda: redact.redact(text, opts),
+               lambda result: self._finished(gen, text, cfg, result),
+               lambda exc: self._failed(gen, exc))
+        return GLib.SOURCE_REMOVE
+
+    def _stale(self, gen):
+        """Mark the background run done. True when the text or settings changed while it
+        ran, in which case a new run is queued and this result should be dropped."""
+        self._busy = False
+        if gen == self._gen:
+            return False
+        if not self._pending:
+            self._pending = GLib.timeout_add(120, self._run)
+        return True
+
+    def _finished(self, gen, text, cfg, result):
+        if self._stale(gen):
+            return
+        out, counts, ranges = result
         self.out_buf.set_text(out)
         for s, e in ranges:
             self.out_buf.apply_tag(self.tag, self.out_buf.get_iter_at_offset(s),
@@ -336,7 +366,19 @@ class RedactView(Gtk.Box):
         self._copy_after_run = False
         self.status.set_text(msg)
         self.status.set_tooltip_text(msg)
-        return GLib.SOURCE_REMOVE
+        if self._copy_when_ready:
+            self._copy_when_ready = False
+            self._copy_output()
+
+    def _failed(self, gen, exc):
+        if self._stale(gen):
+            return
+        self._copy_when_ready = False
+        # Don't leave the old result up looking like it matches the new text
+        self.out_buf.set_text("")
+        msg = f"Couldn't redact this: {exc}"
+        self.status.set_text(msg)
+        self.status.set_tooltip_text(msg)
 
     def _mark_pasted(self, *_):
         self._copy_after_run = True
@@ -377,9 +419,16 @@ class RedactView(Gtk.Box):
             self.status.set_text("Clipboard has no text in it")
 
     def copy(self):
-        if self._pending:  # make sure the output matches what's pasted right now
-            GLib.source_remove(self._pending)
-            self._run()
+        if self._pending or self._busy:
+            # The output is still catching up with what's pasted, so copy once it has
+            self._copy_when_ready = True
+            if self._pending:
+                GLib.source_remove(self._pending)
+                self._run()
+            return
+        self._copy_output()
+
+    def _copy_output(self):
         text = self.out_buf.get_text(self.out_buf.get_start_iter(), self.out_buf.get_end_iter(),
                                      False)
         if not text:
