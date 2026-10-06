@@ -6,7 +6,7 @@ These are small tools I made for my own AWS and Terraform work on Fedora. Each o
 
 They all live in one Linux app called **AWS Kit**: one GTK 4 window with a sidebar of all fourteen tools, plus commands for everything in the terminal.
 
-![AWS Kit open on the PII Redact page](pii-redact/docs/screenshot.png)
+https://github.com/user-attachments/assets/6fdbbe01-4e66-41c5-bc79-f4d612ec5bc5
 
 ## How I built these
 
