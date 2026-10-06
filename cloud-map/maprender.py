@@ -445,6 +445,11 @@ def _edge_ends(src, dst, points):
 
 # =================================================================== the scene
 
+# Reachability outlines on the viewer: the path in green, what blocks it in red.
+PATH_COLOR = "#2ec27e"
+BLOCKED_COLOR = "#e01b24"
+
+
 class Scene:
     """A Layout ready to draw and to hit test. Everything is in page units (layout
     coordinates plus the export margin)."""
@@ -1091,6 +1096,25 @@ class Scene:
             mapicons.rounded_rect(cr, x - 3 * px, y - 3 * px, w + 6 * px, h + 6 * px, 7)
             set_color(cr, SELECT_COLOR)
             cr.set_line_width(3 * px)
+            cr.stroke()
+
+    def draw_path(self, cr, box_ids=(), link_ids=(), bad_ids=(), px=1.0):
+        """Reachability: outlines the boxes and lines a checked path goes through, green,
+        and the one that blocks it, red. px as in draw_selection."""
+        self.scale = 1 / px if px else 1.0
+        bad = set(bad_ids)
+        for link_id in link_ids:
+            link = self.links.get(link_id)
+            if link is not None:
+                self.draw_link(cr, link, color=PATH_COLOR, width=max(3 * px, 2.5), label=False)
+        for box_id in list(box_ids) + [b for b in bad if b not in box_ids]:
+            if box_id not in self.rects:
+                continue
+            x, y, w, h = self.rects[box_id]
+            pad = 5 * px if box_id in bad else 4 * px
+            mapicons.rounded_rect(cr, x - pad, y - pad, w + 2 * pad, h + 2 * pad, 7)
+            set_color(cr, BLOCKED_COLOR if box_id in bad else PATH_COLOR)
+            cr.set_line_width((3.5 if box_id in bad else 2.5) * px)
             cr.stroke()
 
 

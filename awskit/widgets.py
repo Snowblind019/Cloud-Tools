@@ -11,7 +11,7 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 
 from .common import (ClipboardError, export_text, have_pii_redact, pii_redact,  # noqa: E402
-                     write_clipboard)
+                     write_atomic, write_clipboard)
 
 CSS = b"""
 .sev { border-radius: 5px; padding: 1px 7px; font-weight: bold; font-size: 0.85em; color: white; }
@@ -663,8 +663,7 @@ def export_rows(parent, rows, columns, default_name, title=None):
             return  # cancelled
         path = gfile.get_path()
         try:
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(export_text(path, rows, columns, title=title))
+            write_atomic(path, export_text(path, rows, columns, title=title))
         except OSError as exc:
             show_message(parent, "Couldn't save", str(exc))
 
@@ -680,8 +679,7 @@ def save_text(parent, text, default_name):
         except GLib.Error:
             return
         try:
-            with open(gfile.get_path(), "w", encoding="utf-8") as fh:
-                fh.write(text)
+            write_atomic(gfile.get_path(), text)
         except OSError as exc:
             show_message(parent, "Couldn't save", str(exc))
 

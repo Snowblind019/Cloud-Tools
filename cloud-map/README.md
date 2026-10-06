@@ -1,6 +1,6 @@
 # Cloud Map
 
-Draws an AWS environment as a diagram. It reads a live AWS environment or your Terraform, and shows it on its own page in the AWS Kit window, where you can pan, zoom, search and click into anything. It also writes `.drawio` files with the official AWS icons, colors by category, short captions, a legend, layers you can turn on and off, and security problems marked in red, plus SVG and PNG pictures of the same map. You can rearrange a map in an offline draw.io editor, and the next scan keeps your arrangement, your colors and the notes you drew. And it works the other way too: draw a new network with the designer, and get Terraform for it.
+Draws an AWS environment as a diagram. It reads a live AWS environment or your Terraform, and shows it on its own page in the AWS Kit window, where you can pan, zoom, search and click into anything. It also writes `.drawio` files with the official AWS icons, colors by category, short captions, a legend, layers you can turn on and off, and security problems marked in red, plus SVG and PNG pictures of the same map. You can rearrange a map in an offline draw.io editor, and the next scan keeps your arrangement, your colors and the notes you drew. And it works the other way too: draw a new network with the designer, and get Terraform for it. It can also tell whether one thing can reach another on a port, and what's blocking it, see [Reachability](#reachability).
 
 There are two kinds of map. An **access map** shows who can get into what: the organization, OUs and accounts, SCPs, IAM Identity Center, roles, and who each role trusts, like GitHub through OIDC. A **network map** shows VPCs, subnets, routing and gateways. A **combined** map puts both in each account.
 
@@ -12,7 +12,7 @@ Part of [AWS Kit](../awskit/). The screenshots are drawn from the example Terraf
 
 I have a diagram of my AWS Organization (D1) that shows how access works: me through Identity Center, GitHub through an OIDC role, CloudTrail logs going to the management account, and the break-glass role. It's the clearest picture of the setup I have, but it's a static picture, so it's only right until I change something. I wanted that same level of clarity generated from what's actually there, from a live scan or from the Terraform that builds it, so the diagram can't drift from reality. It also points out the things I'd want to catch, like a trust to an account outside the org or SSH open to the world.
 
-Cloud Map was built in four parts: the model, scanners and the draw.io export, then the viewer page in the AWS Kit window with SVG and PNG export, then the offline draw.io editor and the layout memory that keeps where you moved things, and last the designer, which writes Terraform from a diagram (all below).
+Cloud Map was built in five parts: the model, scanners and the draw.io export, then the viewer page in the AWS Kit window with SVG and PNG export, then the offline draw.io editor and the layout memory that keeps where you moved things, then the designer, which writes Terraform from a diagram, and last reachability, which checks what can reach what (all below).
 
 ## What it draws
 
@@ -317,6 +317,156 @@ awskit map design build lab.drawio -o ~/tf/lab --region eu-west-1 --no-validate
 
 draw.io desktop works for designs too: open the design file, and add the library with **File**, **Open Library**, from `cloud-map/designer/awskit-designer.xml` (or `awskit-designer-light.xml`) in the repo, or in the installed copy: `~/.local/share/awskit/cloud-map/designer/`, or `%LOCALAPPDATA%\AWSKit\app\cloud-map\designer\` on Windows. The page watches the design file and offers to check it again when it's saved there.
 
+## Reachability
+
+Answers "can A reach B on this port, and if not, what's blocking it?" It walks the security groups, network ACLs and route tables in a snapshot, from a live scan or from Terraform, on your own machine. AWS has Reachability Analyzer for the same question, but it charges for each analysis and only sees what's already deployed. This is free, makes no AWS calls, and works on a plan before anything exists.
+
+When something in a lab can't connect, like the app to the database, SSH to the bastion, or a private subnet to the internet, the answer is spread over two security groups, two network ACLs and a route table or two. This puts them in one list, in the order a packet meets them, and points at the rule that's in the way.
+
+### What it checks, in order
+
+| Step | What's checked |
+|---|---|
+| Source security groups, outbound | A rule allows the protocol and port to the destination's address, or to a security group the destination is in |
+| Source subnet's network ACL, outbound | Lowest rule number first, the first match wins, and anything left over hits the catch-all deny (`*`) |
+| Route | The source subnet's route table (its own, or the VPC's main one), longest prefix first. A blackhole route still wins and drops the traffic. For the whole internet that's the default route, and unknown when a more specific route sends part of the internet somewhere else, like a firewall or a blackhole. Then whatever the route sends it to, below |
+| Peering connection | It connects to the destination's VPC and is active. Peering isn't transitive, and doesn't reach the internet through the other VPC |
+| Transit gateway | The destination's VPC is attached to it, or to another transit gateway that may be peered with it. Its route tables and peerings aren't in the snapshot, so a path through it is never more than unknown |
+| Internet gateway | The source has a public IP (or an IPv6 address). An egress-only internet gateway carries IPv6 out, and replies back in |
+| NAT gateway | It's available and public, its own subnet's network ACL lets the traffic in and out, and its subnet has a route to an internet gateway |
+| Destination subnet's network ACL, inbound | The same way as the source's |
+| Destination security groups, inbound | A rule allows it from the source's address, or from a security group the source is in |
+| What the destination listens on | A database's port, and a load balancer's listeners when the snapshot has them. Load balancers don't answer ping |
+| Replies | Network ACLs are stateless, so the destination's outbound rules and the source's inbound rules (and the NAT gateway's subnet both ways) are checked again for the replies, on the ephemeral ports 1024-65535. Then the route back: through the same peering connection or transit gateway, or to the internet gateway. Another peering connection that joins the same two VPCs works too, and a transit gateway the traffic didn't come through is unknown. Security groups are stateful, so replies need nothing there |
+
+From the internet, the destination needs a public address (an instance's public IP, an internet-facing load balancer, or a publicly accessible database), its VPC needs an internet gateway, and its subnet's route back to the internet has to go to that gateway. A private subnet whose default route goes to a NAT gateway fails there: the replies would leave from the NAT gateway's address, so the connection never completes.
+
+Two things in the same subnet skip network ACLs and routing, since traffic inside a subnet doesn't cross its network ACL. An instance that's stopped is blocked on both ends.
+
+### What you can check from and to
+
+| Pick | Means |
+|---|---|
+| An instance | Its private IP (or IPv6 address) and its security groups |
+| A load balancer | Its nodes, one in each of its subnets, and its security groups. Each subnet is checked, and reachable through only some of them is "partly blocked" |
+| An RDS database | The subnet it's in, its security groups and its port (the engine's default when it isn't set) |
+| A subnet | Any host in it. Security groups on its side are skipped, so the answer is at the network level |
+| `internet` or `internet-ipv6` | Anywhere on the internet. That's public addresses only, so a rule about `10.0.0.0/8` doesn't count against it |
+| An IP or a CIDR | A resource with that IP, an address or range inside a VPC, a public address, or a private one outside every VPC in the snapshot, like on-premises over a VPN. An instance's public IP works from the internet. From inside AWS, traffic to a public IP goes out and back in through gateways, which one check doesn't follow, so it asks for two checks instead |
+
+Names and IDs both work, like `bastion` or `i-0a1b2c3d4e5f60093`. If an instance and a subnet have the same name, the instance is picked and the result says so. `--list` shows everything there is to pick.
+
+### Ranges and partly
+
+A CIDR, a subnet and the internet are ranges, so a rule has to cover all of the range to pass. When rules only cover part, the result says which part gets through, like "Only part of the internet can reach bastion on tcp 22: 203.0.113.0/24". Every check narrows it further, so a security group that allows one half and a network ACL that allows the other half let nothing through.
+
+### Verdicts
+
+| Verdict | Means | Exit code |
+|---|---|---|
+| Reachable | Every check passed. It says "as far as Cloud Map can tell", and the notes list what it assumed | 0 |
+| Blocked | Something on the way blocks it. The result names the first step that does, with the rule, and the AWS CLI command that would allow it, for you to run if you want to. The command is left out when an ID in the snapshot doesn't look like an AWS ID, since snapshots can come from anywhere | 3 |
+| Partly blocked | Blocked for part of a range, or through only some of a load balancer's subnets | 3 |
+| Unknown | Nothing found blocks it, but a step couldn't be checked: a transit gateway, a prefix list, a VPN, an appliance in the path, or rules the snapshot doesn't have | 4 |
+
+It never says reachable when a step couldn't be checked. Errors, like a name that isn't in the snapshot, exit with 1.
+
+### Assumptions
+
+- Replies are checked on ports 1024-65535, the ephemeral range AWS recommends network ACLs allow. It covers Linux (32768-60999), Windows (49152-65535), NAT gateways and load balancers (1024-65535). When a network ACL only lets part of it back, like 32768-65535, the result is unknown, since it depends on the client, and partly blocked when the client is a NAT gateway or a load balancer.
+- ICMP is checked as ping: an echo request there and an echo reply back. `--protocol all` asks whether every protocol and port gets through.
+- Terraform only has a VPC's default network ACL when you manage it with `aws_default_network_acl`. A subnet with no network ACL in the Terraform input uses the default one, which allows all traffic unless it was changed outside Terraform, and the notes say that was assumed. An `aws_network_acl_rule` added to a default network ACL the input doesn't manage is checked on top of AWS's starting rules for it, which allow everything. A live scan reads every network ACL, so a missing one there is unknown.
+- A database is checked in the subnet it's in now. A Multi-AZ standby, or the database after a failover, is in another subnet of its group, which the notes mention.
+- A security group rule that references a group in a peered VPC only works when both VPCs are in the same region. Through a transit gateway it only works when security group referencing is turned on for it, which the snapshot doesn't have, so it's unknown.
+- An address inside a VPC that no resource on the map has, like a Lambda function's, has unknown security groups.
+- Over IPv6, an instance needs an IPv6 address of its own: one with none recorded is unknown (a live scan records them, so it likely has none). Whether a load balancer or a database is dual-stack isn't recorded, so over IPv6 they're unknown. From the internet, AWS blocks IPv6 traffic to an internal load balancer and to a database that isn't publicly accessible.
+- A Terraform plan can leave network ACL rules, or their addresses, known only after apply. Those network ACLs are unknown.
+
+### What it can't see
+
+- Transit gateway route tables, and the network ACLs on a transit gateway's attachment subnets
+- What's in a prefix list (`pl-...`), in a security group rule or a route
+- Anything past a virtual private gateway: VPN, Direct Connect and on-premises networks
+- Firewalls inside the instance (iptables, Windows Firewall), and whether anything is listening on the port
+- NAT gateway and load balancer target health. From the internet to a load balancer is one check, and from the load balancer to its targets is another
+- AWS Network Firewall, Gateway Load Balancer and other appliances: a route through one is unknown
+- Gateway route tables (ingress routing on an internet gateway)
+- Instances with more than one network interface: only the primary address and the instance's security groups are used
+- Snapshots made before reachability don't have network ACL rules, load balancer and database security groups, listeners, or prefix lists in security group rules. Those steps are unknown until you rescan, or read the Terraform again. Missing listeners are only mentioned in the notes, the same as what an instance listens on
+
+### Using it in the window
+
+![Reachability on the example network map: the internet can reach the bastion on tcp 22, with the path drawn in green and every step listed in the details panel](docs/reachability.png)
+
+The **Reachability** section on the left of the Cloud Map page works on whatever map is loaded:
+
+1. Pick **From** and **To**. Both lists hold every instance, load balancer, database and subnet on the map, plus the internet, and you can type to search them. Or click a box on the map and press **Reach from here** or **Reach to here** in the details panel.
+2. Pick the protocol and type the port. Picking a database or a load balancer fills in its port.
+3. Press **Check**.
+
+The path lights up on the map in green, and the step that blocks it in red. When the blocking security group or network ACL isn't drawn (the Security groups layer is off, and network ACLs are never boxes of their own), the instance, database or subnet it guards gets the red outline instead. The details panel shows the verdict, then every step in order with its status and reason, the AWS CLI command that would allow a blocked step, and the notes. **Copy** gives the same text as the terminal. **Clear** takes the path off the map. A new layout, like turning a layer on, keeps the result and draws the path again on the new boxes.
+
+### Using it in the terminal
+
+```bash
+awskit map reach lab.cloudmap.json internet bastion --port 22           # can I SSH in?
+awskit map reach lab.cloudmap.json app-1 lab-postgres --port 5432        # app to database
+awskit map reach lab.cloudmap.json app-1 internet                        # out through the NAT gateway, tcp 443
+awskit map reach lab.cloudmap.json 10.0.11.0/24 lab-postgres --port 5432 # a whole range
+awskit map reach lab.cloudmap.json app-1 10.1.1.10 --protocol icmp       # ping across a peering
+awskit map reach ~/aws-platform/network internet lab-web                 # a Terraform folder's state
+awskit map reach ~/aws-platform/network internet lab-web --plan          # what the plan would build
+awskit map reach lab.cloudmap.json --list                                # what you can pick
+```
+
+| Option | What it does |
+|---|---|
+| `SOURCE` | A `.cloudmap.json` snapshot, `terraform show -json` output (state or plan), a `.tfstate`, a saved plan, or a Terraform folder, like `awskit map tf` takes |
+| `FROM`, `TO` | An instance, load balancer, database or subnet by ID or name, an IP, a CIDR, `internet` or `internet-ipv6` |
+| `--port PORT` | The destination port for tcp and udp (default 443) |
+| `--protocol P` | `tcp` (default), `udp`, `icmp` (ping) or `all` |
+| `--plan` | For a Terraform folder, check what `terraform plan` would build |
+| `--json` | The result as JSON: the verdict, every step with its status and reason, the notes, and the IDs on the path |
+| `--list` | List what can be checked from and to, and stop |
+
+With the example VPC state:
+
+```text
+$ awskit map reach cloud-map/examples/two-az-vpc-state.json internet lab-postgres --port 5432
+From  The internet (anywhere outside AWS)
+To    lab-postgres (postgres in private-b)
+Over  tcp 5432
+
+Blocked  The internet can't reach lab-postgres on tcp 5432. lab-postgres isn't publicly accessible,
+         so it only has a private address.
+
+On the way there
+  blocked   Public address of lab-postgres
+            lab-postgres isn't publicly accessible, so it only has a private address.
+  ok        Internet gateway lab-igw
+            lab-vpc has internet gateway lab-igw (igw-0a1b2c3d4e5f60031).
+  ok        Network ACL of private-b, inbound
+            No network ACL for private-b is in the Terraform input, so the VPC's default network ACL
+            was assumed, which allows all traffic.
+  blocked   Security group lab-db, inbound
+            No inbound rule in security group lab-db allows tcp 5432 from the internet. Its inbound
+            rules allow: tcp 5432 from lab-app.
+  ...
+Replies
+  ...
+  blocked   Route table private for private-b, replies
+            Route table private sends 0.0.0.0/0 to NAT gateway lab-nat-a (nat-0a1b2c3d4e5f60041).
+            Replies leave through the NAT gateway with its address, not the one the client connected
+            to, so the connection fails. private-b is a private subnet: use a public subnet, or put
+            a load balancer in front.
+```
+
+The same check from the bastion's side, `internet bastion --port 22`, is reachable, since the bastion is in a public subnet with a public IP and its security group allows SSH from anywhere (which is also why the map flags it).
+
+### What it reads
+
+Everything comes from the snapshot, so a check costs nothing and needs no permissions. For it to have what it needs, the live scan records each network ACL's rules (`DescribeNetworkAcls`, which it already called), the security groups and port of each load balancer and database (`DescribeLoadBalancers` and `DescribeDBInstances`, the same), each load balancer's listeners (`DescribeListeners`, one call per load balancer), prefix lists in security group rules, IPv6 addresses of instances, and blackhole routes. The Terraform input reads the same from `aws_network_acl` (inline rules), `aws_network_acl_rule`, `aws_network_acl_association`, `aws_default_network_acl`, `aws_lb` and `aws_lb_listener`, and `aws_db_instance`. None of it changes how a map looks.
+
 ## Using it in the terminal
 
 Scanning and drawing are separate steps. A scan makes a snapshot, and one snapshot can be drawn as many maps as you like without scanning again:
@@ -482,7 +632,7 @@ It only reads. Each profile gets one task per account-wide part and one task per
 | S3 | `ListBuckets` | Only used to find which scanned account owns the trail's bucket |
 | Cost | Budgets `DescribeBudgets`, Cost Explorer `GetAnomalyMonitors` | The cost guardrails box |
 | EC2 | `DescribeVpcs`, `DescribeSubnets`, `DescribeRouteTables`, `DescribeInternetGateways`, `DescribeEgressOnlyInternetGateways`, `DescribeNatGateways`, `DescribeTransitGateways`, `DescribeTransitGatewayAttachments`, `DescribeVpcPeeringConnections`, `DescribeVpcEndpoints`, `DescribeSecurityGroups`, `DescribeNetworkAcls`, `DescribeInstances`, `DescribeVpnGateways`, `DescribeCustomerGateways`, `DescribeVpnConnections` | The network |
-| ELB | `DescribeLoadBalancers` | Load balancers, in a row at the top of their VPC |
+| ELB | `DescribeLoadBalancers`, `DescribeListeners` | Load balancers, in a row at the top of their VPC, and their listeners for [reachability](#reachability) |
 | RDS | `DescribeDBInstances` | Databases, placed in the subnet from their subnet group that's in their zone |
 
 How it reads things:
@@ -520,8 +670,8 @@ The full list of types it reads is the `TYPE_KINDS` table at the top of `maptf.p
 | `aws_vpc_peering_connection` | Peering line |
 | `aws_vpc_endpoint` | Endpoint, and its prefix-list route for gateway endpoints |
 | `aws_security_group` and its rule types | Security group, flags and lines between groups |
-| `aws_network_acl` | Network ACL |
-| `aws_instance`, `aws_lb`, `aws_db_instance` | Instances, load balancers, databases |
+| `aws_network_acl`, `aws_default_network_acl`, `aws_network_acl_rule`, `aws_network_acl_association` | Network ACL, with its rules for reachability |
+| `aws_instance`, `aws_lb`, `aws_lb_listener`, `aws_db_instance` | Instances, load balancers and their listeners, databases |
 | `aws_organizations_*` | The org, OUs, accounts and SCPs |
 | `aws_iam_role`, `aws_iam_openid_connect_provider`, `aws_iam_saml_provider` | Roles, providers and trust lines |
 | `aws_ssoadmin_permission_set`, `aws_ssoadmin_account_assignment`, `aws_identitystore_user`, `aws_identitystore_group` | Identity Center |
@@ -567,7 +717,7 @@ Organizations and Identity Center also need the management account or a delegate
 | IAM | `iam:ListRoles`, `ListAttachedRolePolicies`, `ListOpenIDConnectProviders`, `GetOpenIDConnectProvider`, `ListSAMLProviders`, `ListAccountAliases` |
 | CloudTrail and S3 | `cloudtrail:DescribeTrails`, `s3:ListAllMyBuckets` |
 | Cost (not in SecurityAudit) | `budgets:ViewBudget`, `ce:GetAnomalyMonitors` |
-| Network | `ec2:Describe*` for the calls in the table above, `elasticloadbalancing:DescribeLoadBalancers`, `rds:DescribeDBInstances` |
+| Network | `ec2:Describe*` for the calls in the table above, `elasticloadbalancing:DescribeLoadBalancers`, `DescribeListeners`, `rds:DescribeDBInstances` |
 
 If the identity store's list calls are denied, it falls back to `identitystore:DescribeUser` and `DescribeGroup` for each user and group.
 
@@ -601,7 +751,8 @@ If the identity store's list calls are denied, it falls back to `identitystore:D
         "ec2:DescribeVpcEndpoints", "ec2:DescribeSecurityGroups", "ec2:DescribeNetworkAcls",
         "ec2:DescribeInstances", "ec2:DescribeVpnGateways", "ec2:DescribeCustomerGateways",
         "ec2:DescribeVpnConnections",
-        "elasticloadbalancing:DescribeLoadBalancers", "rds:DescribeDBInstances"
+        "elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeListeners",
+        "rds:DescribeDBInstances"
       ],
       "Resource": "*"
     }
@@ -674,6 +825,7 @@ Every AWS icon name Cloud Map writes was checked against the AWS shape set insid
 | `designer/make_designer_files.py` | Writes the libraries and the example designs |
 | `examples/design-two-az-vpc.drawio` | An example design: two zones, public and private subnets, a NAT gateway per zone, an S3 endpoint, two security groups with an arrow |
 | `examples/broken-designs/` | One design per check, for the tests |
+| `mapreach.py` | Reachability: the walk through security groups, network ACLs and routes, and its text. No GTK |
 | `cloudmap.py` | The `awskit map` command, redaction, the labels file, the export formats, and the working file for Edit |
 | `examples/d1-org-state.json` | The org from my D1 diagram, as a Terraform state. All fake. |
 | `examples/two-az-vpc-state.json` | A two-AZ VPC, as a Terraform state. All fake. |

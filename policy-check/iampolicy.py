@@ -74,6 +74,9 @@ PASSROLE_PAIRS = {
     "codebuild:CreateProject": "create a build project with any role",
     "datapipeline:CreatePipeline": "create a pipeline with any role",
     "states:CreateStateMachine": "create a state machine with any role",
+    "ec2:AssociateIamInstanceProfile": "attach any role to a running instance",
+    "ec2:ReplaceIamInstanceProfileAssociation": "swap the role on a running instance",
+    "lambda:UpdateFunctionConfiguration": "switch a function to run as any role",
 }
 
 DEFENSE_EVASION = {
@@ -554,12 +557,19 @@ def analyze(doc, kind: str | None = None) -> list:
             role_broad = is_broad_resource(resources) or has_not_resource
             if role_broad:
                 passrole_broad_where.append(where)
-                if "iam:passedtoservice" not in conds and not any(
-                        str(a) in ("*", "*:*") for a in actions):
+                if "iam:passedtoservice" not in conds:
                     out.append(Finding("high", "iam:PassRole on any role",
                                        "Can hand any role, including admin roles, to a service.",
                                        where, "Limit Resource to the role ARNs needed and add "
                                        "a iam:PassedToService condition."))
+                else:
+                    # The condition picks the service, not the role, so any role, admin
+                    # ones included, can still be handed to that service.
+                    out.append(Finding("medium", "iam:PassRole on any role, for some services",
+                                       "iam:PassedToService limits which services get a role, "
+                                       "but any role, including admin roles, can still be "
+                                       "handed to them.",
+                                       where, "Limit Resource to the role ARNs needed."))
         if not star:
             for action, why in matched(patterns, PASSROLE_PAIRS).items():
                 passrole_pair_hits.setdefault(action, (why, where))

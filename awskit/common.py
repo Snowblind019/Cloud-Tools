@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = "1.4.0"
+VERSION = "1.5.1"
 APP_NAME = "AWS Kit"
 APP_ID = "io.github.Snowblind019.AwsKit"
 PICKER_APP_ID = APP_ID + ".Profiles"
@@ -57,6 +57,10 @@ DEFAULT_CONFIG = {
     "known_accounts": [],
     # What the Cloud Map page showed last: snapshot, map type, filters, layers and theme.
     "cloud_map": {},
+    # Secrets Scan: last folder, scan mode, and whether account IDs block a commit.
+    "secrets_scan": {},
+    # Drift: resources to leave out of the comparison, by ID or tag.
+    "drift": {},
 }
 
 
@@ -68,7 +72,12 @@ def load_config() -> dict:
         data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         if isinstance(data, dict):
             for key, value in data.items():
-                if key in cfg and isinstance(value, type(cfg[key])):
+                if key in cfg:
+                    if isinstance(value, type(cfg[key])):
+                        cfg[key] = value
+                elif isinstance(key, str):
+                    # Keys this version doesn't know (a newer AWS Kit's) are kept as they
+                    # are, so saving the config here doesn't wipe them.
                     cfg[key] = value
     except (OSError, ValueError):
         pass
@@ -476,12 +485,24 @@ SEVERITY_COLOR = {"critical": "magenta", "high": "red", "medium": "yellow", "low
                   "info": "dim"}
 
 
+# Control characters and the ones that flip text direction. Names and tags from AWS, a
+# Terraform state or a snapshot can hold them, and in a terminal they can move the cursor,
+# recolor or hide lines, so terminal output shows them as ?.
+_UNSAFE_CHARS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e"
+                           "\u2066-\u2069\u2028\u2029]")
+
+
+def terminal_safe(text) -> str:
+    """text with control and text-direction characters shown as ?, newlines and tabs kept."""
+    return _UNSAFE_CHARS.sub("?", str(text))
+
+
 def table_text(rows, columns, max_width=60, colorize=None) -> str:
     """Plain aligned table for the terminal. colorize(key, value) can return a color name."""
     if not rows:
         return ""
     def cut(v):
-        s = str(v if v is not None else "").replace("\n", " ")
+        s = terminal_safe(str(v if v is not None else "").replace("\n", " ").replace("\t", " "))
         return s if len(s) <= max_width else s[: max_width - 1] + "…"
     widths = []
     for key, title in columns:

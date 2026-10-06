@@ -1,6 +1,6 @@
 # CloudTrail
 
-Shows who did what in your AWS account and when, as a clean timeline, from CloudTrail event history. It has an errors-only filter for tracking down AccessDenied, and it pulls the missing permission and the reason out of the error message for you.
+Shows who did what in your AWS account and when, as a clean timeline, from CloudTrail event history. It has an errors-only filter for tracking down AccessDenied, it pulls the missing permission and the reason out of the error message for you, and it flags the calls worth a second look from a security point of view, like root use, a sign-in without MFA or someone stopping CloudTrail.
 
 ![CloudTrail timeline with a failed PutBucketPolicy call selected](docs/screenshot.png)
 
@@ -40,12 +40,15 @@ Two more filters are applied after the events come back, so they work together w
 
 When one of those after-filters is on, it reads up to four times as many events so the filtered list still has enough in it.
 
+**Security events** keeps only the calls worth a second look (see [Security events](#security-events) below). It's applied after the events come back too, and since most events aren't security events, it reads up to ten times as many.
+
 **My actions** looks up the session name of the current profile (from `sts get-caller-identity`) and searches for that, which is the quickest way to see what your own role just tried to do.
 
 ## Reading the results
 
 | Column | What it shows |
 |---|---|
+| Flag | A severity badge when the call is a security event worth a look, empty otherwise. Sort by it to see those first. |
 | Time | Local time of the call |
 | Who | Shortened identity. SSO roles show as `AdministratorAccess (SSO)/session` instead of `AWSReservedSSO_AdministratorAccess_0123456789abcdef/session`. Other roles show as `role/session`, IAM users by name, services by their service name, and `root` for the root user. |
 | Action | `service:EventName`, like `s3:PutBucketPolicy` |
@@ -67,12 +70,36 @@ Why: public policies are blocked by the BlockPublicPolicy block public access se
 
 The "why" part tells you which kind of policy blocked it: no identity-based policy allows it, an explicit deny in an identity policy, an SCP, a permissions boundary, a session policy, a resource policy, or a setting like Block Public Access. That tells you where to look.
 
+## Security events
+
+Some calls are worth a second look even when nothing failed. The list follows the monitoring section of the CIS AWS Foundations Benchmark (the alarms it asks every account to have), plus a few more that undo a protection. Every event that matches gets a badge in the Flag column, and the details pane starts with what it is and why it matters.
+
+| Flag | What | Calls |
+|---|---|---|
+| critical | Snapshot or image shared with everyone | `ModifySnapshotAttribute` / `ModifyImageAttribute` adding the group `all` |
+| high | Root user used | Anything done by the root user itself (not AWS acting on its behalf) |
+| high | Console sign-in without MFA | A successful `ConsoleLogin` by an IAM user or root without MFA. Identity Center sign-ins are left out, since their MFA happens outside AWS's sign-in page. |
+| high | CloudTrail changed | `CreateTrail`, `UpdateTrail`, `DeleteTrail`, `StartLogging`, `StopLogging`, `PutEventSelectors` |
+| high | AWS Config recording changed | `StopConfigurationRecorder`, `DeleteDeliveryChannel`, `PutDeliveryChannel`, `PutConfigurationRecorder` |
+| high | KMS key disabled or set to be deleted | `DisableKey`, `ScheduleKeyDeletion` |
+| high | GuardDuty turned off | `DeleteDetector`, `UpdateDetector` with enable false, leaving the administrator account |
+| high | S3 Block Public Access loosened | `DeletePublicAccessBlock`, or `PutPublicAccessBlock` with any setting off |
+| medium | IAM policy changed | Creating, changing, attaching and detaching policies, trust policies and permissions boundaries |
+| medium | New IAM user or credentials | `CreateUser`, `CreateAccessKey`, `CreateLoginProfile`, `UpdateLoginProfile`, removing an MFA device |
+| medium | Organizations changed | Accounts, OUs, SCPs and handshakes |
+| medium | Failed console sign-in | `ConsoleLogin` that failed |
+| medium | S3 bucket policy or ACL changed | Bucket policies, ACLs, CORS, lifecycle and replication |
+| medium | Call denied | Any call that failed with AccessDenied or UnauthorizedOperation |
+| low | Security group, network ACL, gateway, route table or VPC changed | The network changes in the CIS list |
+
+These are management events, so they're all in Event history. An organization trail with CloudWatch alarms or EventBridge rules is the way to be told about them as they happen; this is for looking back.
+
 ## Using it in the window
 
 1. Pick a filter type, or leave it on **Anything**, and type the value.
 2. Pick a time window, from **Last 15 minutes** to **Last 90 days**.
 3. Pick **Regions**. It starts on your profile's region plus us-east-1.
-4. Tick **Errors only** or **Hide reads** if you want.
+4. Tick **Errors only**, **Hide reads** or **Security events** if you want.
 5. Press **Search**, or Enter in the value box.
 
 It shows up to 1,000 events, newest first. The filter box above the table narrows the results further without asking AWS again.
@@ -88,6 +115,7 @@ awskit trail --event ConsoleLogin -r us-east-1 --since 7d
 awskit trail --source iam.amazonaws.com -r us-east-1 --writes
 awskit trail --since "2026-10-01 14:00" --until "2026-10-01 15:00"
 awskit trail --all-regions --errors --since 6h
+awskit trail --security --since 7d -r us-east-1   # root use, CloudTrail, IAM and network changes
 awskit trail --mine --json > events.json
 ```
 
@@ -97,6 +125,7 @@ awskit trail --mine --json > events.json
 | `--mine` | Your own session, instead of one of the filters above |
 | `-e`, `--errors` | Only failed calls |
 | `-w`, `--writes` | Hide read-only calls |
+| `-s`, `--security` | Only security events worth a look, with what each one is and why under the table |
 | `--since WHEN` | How far back: `30m`, `2h`, `3d`, `1w`, or a date and time. Default `1h`. |
 | `--until WHEN` | End time, same format. Default now. |
 | `-r`, `--region REGION` | Region to search. Repeatable. Default is the profile's region. |
@@ -143,6 +172,6 @@ Dates without a time zone are read as your local time.
 
 | File | What it is |
 |---|---|
-| `trail.py` | Lookups, event parsing, the Who formatting and the AccessDenied explainer. No GTK. |
+| `trail.py` | Lookups, event parsing, the Who formatting, the AccessDenied explainer and the security event rules. No GTK. |
 | `trail_page.py` | The CloudTrail page |
 | `docs/screenshot.png` | The screenshot above |

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs AWS Kit, with all nine tools, for your user. No sudo needed for this part.
+# Installs AWS Kit, with all fourteen tools, for your user. No sudo needed for this part.
 #
 # Options:
 #   --drawio-zip PATH   use a draw.war you already downloaded (for networks that block GitHub)

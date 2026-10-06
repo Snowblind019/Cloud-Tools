@@ -98,9 +98,13 @@ def terraform_bin():
                     return path
         return None
     for name in TF_NAMES:
-        path = shutil.which(name)
+        # Only from a folder in PATH given as a full path. With "." or an empty entry in
+        # PATH, which would hand back a relative path, Terraform would run from the folder
+        # being planned, so a repo could ship its own "terraform".
+        folders = [d for d in os.environ.get("PATH", "").split(os.pathsep) if os.path.isabs(d)]
+        path = shutil.which(name, path=os.pathsep.join(folders))
         if path:
-            return path
+            return os.path.abspath(path)
     return None
 
 
@@ -155,6 +159,15 @@ def _tail(text, lines=25):
     return "\n".join(rows[-lines:])
 
 
+def _json_out(text) -> dict:
+    """Terraform's JSON output, read safely: a folder's code decides what's in it."""
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError) as exc:
+        raise PlanError(f"terraform show didn't print JSON Plan Check can read: "
+                        f"{type(exc).__name__}") from exc
+
+
 def show_json(plan_file: str, profile=None, cwd=None) -> dict:
     """terraform show -json on a saved plan. It runs in cwd (the plan's folder unless
     given), which needs the .terraform folder the plan was made with."""
@@ -166,10 +179,7 @@ def show_json(plan_file: str, profile=None, cwd=None) -> dict:
              profile=profile)
     if r.returncode != 0:
         raise PlanError("terraform show failed:\n" + _tail(r.stderr or r.stdout))
-    try:
-        return json.loads(r.stdout)
-    except ValueError as exc:
-        raise PlanError(f"terraform show didn't print JSON: {exc}") from exc
+    return _json_out(r.stdout)
 
 
 def show_state(directory: str, profile=None) -> dict:
@@ -182,10 +192,7 @@ def show_state(directory: str, profile=None) -> dict:
     r = _run([tf, "show", "-json", "-no-color"], cwd=directory, profile=profile)
     if r.returncode != 0:
         raise PlanError("terraform show failed:\n" + _tail(r.stderr or r.stdout))
-    try:
-        return json.loads(r.stdout or "{}")
-    except ValueError as exc:
-        raise PlanError(f"terraform show didn't print JSON: {exc}") from exc
+    return _json_out(r.stdout or "{}")
 
 
 def plan_directory(directory: str, extra_args=None, log=None, profile=None) -> dict:

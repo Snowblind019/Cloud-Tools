@@ -284,8 +284,18 @@ def task_net(ctx, region, notes):
     out = {}
     for key, method, field in EC2_CALLS:
         out[key] = notes.listing("EC2 " + key.replace("_", " "), ec2, method, field) or []
-    out["lbs"] = notes.listing("Load balancers", ctx.client("elbv2", region),
-                               "describe_load_balancers", "LoadBalancers") or []
+    elb = ctx.client("elbv2", region)
+    out["lbs"] = notes.listing("Load balancers", elb, "describe_load_balancers",
+                               "LoadBalancers") or []
+    # One call per load balancer, so reachability can say whether anything listens on a
+    # port. None when it couldn't be read, so "no listeners" isn't claimed by mistake.
+    out["listeners"] = {}
+    for lb in out["lbs"]:
+        arn = lb.get("LoadBalancerArn")
+        if arn:
+            out["listeners"][arn] = notes.listing("Load balancer listeners", elb,
+                                                  "describe_listeners", "Listeners",
+                                                  LoadBalancerArn=arn)
     out["dbs"] = notes.listing("RDS", ctx.client("rds", region), "describe_db_instances",
                                "DBInstances") or []
     return out
@@ -519,17 +529,19 @@ def _build_network(snap, ctx, region, d):
                "EgressOnlyInternetGatewayId", "NetworkInterfaceId", "InstanceId",
                "LocalGatewayId", "CarrierGatewayId")
     for rt in d["route_tables"]:
-        routes = []
+        routes, holes = [], []
         for r in rt.get("Routes", []):
             dest = (r.get("DestinationCidrBlock") or r.get("DestinationIpv6CidrBlock") or
                     r.get("DestinationPrefixListId") or "")
             target = next((r[k] for k in targets if r.get(k)), "")
             if dest and target and r.get("State", "active") == "active":
                 routes.append({"dest": dest, "target": target})
+            elif dest and r.get("State") == "blackhole":
+                holes.append({"dest": dest, "target": target})
         subnets = [a["SubnetId"] for a in rt.get("Associations", []) if a.get("SubnetId")]
         main = any(a.get("Main") for a in rt.get("Associations", []))
         mm.add_route_table(snap, rt["RouteTableId"], rt.get("VpcId", ""), routes, subnets, main,
-                           name_tag(rt.get("Tags")), _tags(rt))
+                           name_tag(rt.get("Tags")), _tags(rt), blackholes=holes)
     for e in d["endpoints"]:
         if e.get("State", "").lower() in ("deleted", "deleting", "rejected", "failed"):
             continue
@@ -543,25 +555,35 @@ def _build_network(snap, ctx, region, d):
     for n in d["nacls"]:
         mm.add_nacl(snap, n["NetworkAclId"], n.get("VpcId", ""),
                     [a["SubnetId"] for a in n.get("Associations", []) if a.get("SubnetId")],
-                    n.get("IsDefault", False), name_tag(n.get("Tags")), _tags(n))
+                    n.get("IsDefault", False), name_tag(n.get("Tags")), _tags(n),
+                    entries=_nacl_entries(n.get("Entries", [])))
     for res in d["reservations"]:
         for i in res.get("Instances", []):
             state = (i.get("State") or {}).get("Name", "")
             if state in ("terminated", "shutting-down") or not i.get("SubnetId"):
                 continue
             meta = i.get("MetadataOptions") or {}
+            ipv6 = sorted({a.get("Ipv6Address") for eni in i.get("NetworkInterfaces", [])
+                           for a in eni.get("Ipv6Addresses", []) if a.get("Ipv6Address")})
+            extra = {"ipv6_ips": ipv6} if ipv6 else {}
             mm.add_instance(snap, i["InstanceId"], i["SubnetId"], i.get("VpcId", ""),
                             name_tag(i.get("Tags")), i.get("InstanceType", ""), state,
                             i.get("PrivateIpAddress", ""), i.get("PublicIpAddress", ""),
                             [g["GroupId"] for g in i.get("SecurityGroups", [])],
                             meta.get("HttpTokens", ""), meta.get("HttpEndpoint", ""),
-                            (i.get("IamInstanceProfile") or {}).get("Arn", ""), _tags(i))
+                            (i.get("IamInstanceProfile") or {}).get("Arn", ""), _tags(i),
+                            **extra)
+    listeners = d.get("listeners") or {}
     for lb in d["lbs"]:
         zones = lb.get("AvailabilityZones", [])
+        got = listeners.get(lb["LoadBalancerArn"])
         mm.add_lb(snap, lb["LoadBalancerArn"], lb.get("LoadBalancerName", ""), lb.get("VpcId", ""),
                   [z.get("SubnetId", "") for z in zones if z.get("SubnetId")],
                   [z.get("ZoneName", "") for z in zones], lb.get("Scheme", ""),
-                  lb.get("Type", "application"))
+                  lb.get("Type", "application"),
+                  security_groups=list(lb.get("SecurityGroups") or []),
+                  listeners=None if got is None else [
+                      {"port": li.get("Port"), "protocol": li.get("Protocol", "")} for li in got])
     for db in d["dbs"]:
         group = db.get("DBSubnetGroup") or {}
         mm.add_rds(snap, db["DBInstanceArn"], db.get("DBInstanceIdentifier", ""),
@@ -569,7 +591,10 @@ def _build_network(snap, ctx, region, d):
                    [s["SubnetIdentifier"] for s in group.get("Subnets", []) if s.get("SubnetIdentifier")],
                    db.get("AvailabilityZone", ""), db.get("Engine", ""), db.get("EngineVersion", ""),
                    db.get("DBInstanceClass", ""), db.get("PubliclyAccessible", False),
-                   tags_dict(db.get("TagList")))
+                   tags_dict(db.get("TagList")),
+                   security_groups=[g.get("VpcSecurityGroupId") for g in db.get("VpcSecurityGroups", [])
+                                    if g.get("VpcSecurityGroupId")],
+                   port=(db.get("Endpoint") or {}).get("Port") or db.get("DbInstancePort") or None)
     for c in d["cgws"]:
         if c.get("State") in ("deleted", "deleting"):
             continue
@@ -590,7 +615,26 @@ def _perms(perms) -> list:
         cidrs = [r.get("CidrIp") for r in p.get("IpRanges", [])] + \
                 [r.get("CidrIpv6") for r in p.get("Ipv6Ranges", [])]
         groups = [g.get("GroupId") for g in p.get("UserIdGroupPairs", [])]
+        lists = [x.get("PrefixListId") for x in p.get("PrefixListIds", [])]
         desc = next((r.get("Description") for r in p.get("IpRanges", []) if r.get("Description")), "")
         out.append(mm.rule(p.get("IpProtocol", "-1"), p.get("FromPort"), p.get("ToPort"),
-                           cidrs, groups, desc))
+                           cidrs, groups, desc, prefix_lists=lists))
+    return out
+
+
+def _nacl_entries(entries) -> list:
+    """DescribeNetworkAcls entries as model rules. AWS lists the catch-all deny (32767,
+    and 32768 for IPv6) itself."""
+    out = []
+    for e in entries or []:
+        ports = e.get("PortRange") or {}
+        icmp = e.get("IcmpTypeCode") or {}
+        try:
+            out.append(mm.nacl_entry(e.get("RuleNumber"), e.get("Egress", False),
+                                     e.get("RuleAction", "deny"), e.get("Protocol", "-1"),
+                                     e.get("CidrBlock", ""), e.get("Ipv6CidrBlock", ""),
+                                     ports.get("From"), ports.get("To"),
+                                     icmp.get("Type"), icmp.get("Code")))
+        except (TypeError, ValueError):
+            continue
     return out

@@ -642,7 +642,10 @@ def add_nat(snap, nat_id, subnet_id, vpc_id="", connectivity="public", public_ip
 
 
 def add_route_table(snap, rt_id, vpc_id, routes=(), subnets=(), main=False, name="",
-                    tags=None, source="aws") -> Node:
+                    tags=None, source="aws", blackholes=()) -> Node:
+    """blackholes: routes whose target is gone ({dest, target}). They still win the
+    longest-prefix match and drop the traffic, so reachability needs them, but they
+    aren't drawn. Only kept when there are some, so older snapshots stay the same."""
     a, r = _in_vpc(snap, vpc_id)
     node = snap.add(Node(rt_id, "route-table", name, parent=vpc_id, account=a, region=r,
                          tags=dict(tags or {}), source=source,
@@ -653,6 +656,14 @@ def add_route_table(snap, rt_id, vpc_id, routes=(), subnets=(), main=False, name
         associate_subnet(snap, rt_id, s)
     if main:
         node.props["main"] = True
+    holes = [{"dest": str(b.get("dest", "")), "target": str(b.get("target", ""))}
+             for b in blackholes or () if b.get("dest")]
+    if holes:
+        known = node.props.setdefault("blackholes", [])
+        for h in holes:
+            if h not in known:
+                known.append(h)
+        known.sort(key=lambda x: (_dest_key(x["dest"]), x["target"]))
     return node
 
 
@@ -729,12 +740,18 @@ def add_endpoint(snap, vpce_id, vpc_id, service, endpoint_type="Gateway", subnet
                              "route_tables": sorted(set(route_tables))}))
 
 
-def rule(protocol="-1", from_port=None, to_port=None, cidrs=(), groups=(), description=""):
-    """One security group rule, the same shape whichever input it came from."""
-    return {"protocol": str(protocol if protocol not in (None, "") else "-1"),
-            "from": from_port, "to": to_port,
-            "cidrs": sorted(set(c for c in cidrs if c)),
-            "groups": sorted(set(g for g in groups if g)), "description": description or ""}
+def rule(protocol="-1", from_port=None, to_port=None, cidrs=(), groups=(), description="",
+         prefix_lists=()):
+    """One security group rule, the same shape whichever input it came from. prefix_lists
+    (pl-... IDs) are only kept when there are some, so older snapshots stay the same."""
+    out = {"protocol": str(protocol if protocol not in (None, "") else "-1"),
+           "from": from_port, "to": to_port,
+           "cidrs": sorted(set(c for c in cidrs if c)),
+           "groups": sorted(set(g for g in groups if g)), "description": description or ""}
+    pls = sorted(set(str(p) for p in prefix_lists or () if p))
+    if pls:
+        out["prefix_lists"] = pls
+    return out
 
 
 def add_security_group(snap, sg_id, vpc_id, name="", description="", ingress=(), egress=(),
@@ -785,15 +802,96 @@ def _sort_lists(snap):
                     node.props[direction].sort(key=lambda x: json.dumps(x, sort_keys=True))
         elif node.kind == "route-table" and isinstance(node.props.get("routes"), list):
             node.props["routes"].sort(key=lambda x: (_dest_key(x["dest"]), x["target"]))
+        elif node.kind == "nacl" and isinstance(node.props.get("entries"), list):
+            node.props["entries"].sort(key=_entry_key)
+
+
+# Protocol names as AWS numbers them, the way network ACL entries store them.
+PROTOCOL_NUMBERS = {"tcp": "6", "udp": "17", "icmp": "1", "icmpv6": "58", "icmp6": "58",
+                    "all": "-1", "-1": "-1"}
+# The rule number AWS gives the catch-all deny at the end of every network ACL ("*").
+NACL_DEFAULT_RULE = 32767
+
+
+def protocol_number(protocol) -> str:
+    """'6' for tcp, '-1' for all traffic, and so on. Numbers stay numbers."""
+    p = str(protocol if protocol not in (None, "") else "-1").strip().lower()
+    if p in PROTOCOL_NUMBERS:
+        return PROTOCOL_NUMBERS[p]
+    try:
+        n = int(p)
+    except ValueError:
+        return p
+    return "-1" if n < 0 else str(n)
+
+
+def _int_or_none(value):
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def nacl_entry(rule_number, egress, action, protocol="-1", cidr="", ipv6_cidr="",
+               from_port=None, to_port=None, icmp_type=None, icmp_code=None) -> dict:
+    """One network ACL rule, the same shape whichever input it came from. Ports are only
+    kept for tcp and udp, and the ICMP type and code for ICMP."""
+    proto = protocol_number(protocol)
+    out = {"rule": int(rule_number), "egress": bool(egress),
+           "action": "allow" if str(action).strip().lower() == "allow" else "deny",
+           "protocol": proto, "cidr": str(cidr or ""), "ipv6_cidr": str(ipv6_cidr or ""),
+           "from": None, "to": None}
+    if proto in ("6", "17"):
+        out["from"], out["to"] = _int_or_none(from_port), _int_or_none(to_port)
+    elif proto in ("1", "58"):
+        if _int_or_none(icmp_type) is not None:
+            out["icmp_type"] = _int_or_none(icmp_type)
+        if _int_or_none(icmp_code) is not None:
+            out["icmp_code"] = _int_or_none(icmp_code)
+    return out
+
+
+def default_nacl_entries() -> list:
+    """The catch-all deny AWS puts last in every network ACL, in both directions. A live
+    scan lists it, Terraform doesn't, so the Terraform input adds it."""
+    return [nacl_entry(NACL_DEFAULT_RULE, egress, "deny", "-1", "0.0.0.0/0")
+            for egress in (False, True)]
+
+
+def _entry_key(entry):
+    return (bool(entry.get("egress")), int(entry.get("rule", 0)),
+            json.dumps(entry, sort_keys=True))
 
 
 def add_nacl(snap, acl_id, vpc_id, subnets=(), is_default=False, name="", tags=None,
-             source="aws") -> Node:
+             source="aws", entries=None) -> Node:
+    """entries: the rules (nacl_entry), when the input has them. A snapshot made before
+    rules were recorded has no "entries" at all, which reachability treats as unknown."""
     a, r = _in_vpc(snap, vpc_id)
-    return snap.add(Node(acl_id, "nacl", name, parent=vpc_id, account=a, region=r,
-                         tags=dict(tags or {}), source=source, props={
-                             "vpc": vpc_id, "subnets": sorted(set(subnets)),
-                             "default": bool(is_default)}))
+    props = {"vpc": vpc_id, "subnets": sorted(set(subnets)), "default": bool(is_default)}
+    if entries is not None:
+        props["entries"] = []
+    node = snap.add(Node(acl_id, "nacl", name, parent=vpc_id, account=a, region=r,
+                         tags=dict(tags or {}), source=source, props=props))
+    for e in entries or ():
+        add_nacl_entry(snap, acl_id, e)
+    return node
+
+
+def add_nacl_entry(snap, acl_id, entry):
+    """Add one rule. Rule numbers are unique per direction, so a rule Terraform lists both
+    inline and as its own aws_network_acl_rule is kept once."""
+    node = snap.get(acl_id)
+    if node is None or node.kind != "nacl":
+        return                  # a rule for an ACL that isn't in this input
+    entries = node.props.setdefault("entries", [])
+    key = (bool(entry.get("egress")), int(entry.get("rule", 0)))
+    if any((bool(e.get("egress")), int(e.get("rule", 0))) == key for e in entries):
+        return
+    entries.append(entry)
+    entries.sort(key=_entry_key)
 
 
 def add_instance(snap, instance_id, subnet_id, vpc_id="", name="", instance_type="", state="",
@@ -810,17 +908,57 @@ def add_instance(snap, instance_id, subnet_id, vpc_id="", name="", instance_type
 
 
 def add_lb(snap, arn, name, vpc_id, subnets=(), azs=(), scheme="", lb_type="application",
-           tags=None, source="aws") -> Node:
+           tags=None, source="aws", security_groups=None, listeners=None) -> Node:
+    """security_groups: a list when the input says (a Network Load Balancer can have
+    none). listeners: [{port, protocol}] when they were read. Left out when unknown, so
+    older snapshots stay the same and reachability can tell "none" from "not read"."""
     a, r = _in_vpc(snap, vpc_id)
-    return snap.add(Node(arn, "lb", name, parent=vpc_id, account=a or account_of_arn(arn),
+    props = {"arn": arn, "vpc": vpc_id, "subnets": sorted(set(subnets)),
+             "azs": sorted(set(azs)), "scheme": scheme, "type": lb_type}
+    if security_groups is not None:
+        props["security_groups"] = sorted(set(g for g in security_groups if g))
+    if listeners is not None:
+        props["listeners"] = []
+    node = snap.add(Node(arn, "lb", name, parent=vpc_id, account=a or account_of_arn(arn),
                          region=r or region_of_arn(arn), tags=dict(tags or {}), source=source,
-                         props={"arn": arn, "vpc": vpc_id, "subnets": sorted(set(subnets)),
-                                "azs": sorted(set(azs)), "scheme": scheme, "type": lb_type}))
+                         props=props))
+    for li in listeners or ():
+        add_listener(snap, arn, li.get("port"), li.get("protocol", ""))
+    return node
+
+
+def add_listener(snap, lb_id, port, protocol=""):
+    node = snap.get(lb_id)
+    port = _int_or_none(port)
+    if node is None or port is None:
+        return
+    items = node.props.setdefault("listeners", [])
+    item = {"port": port, "protocol": str(protocol or "").upper()}
+    if item not in items:
+        items.append(item)
+        items.sort(key=lambda x: (x["port"], x["protocol"]))
+
+
+# The port each RDS engine listens on unless it's set.
+ENGINE_PORTS = (("aurora-postgresql", 5432), ("postgres", 5432), ("aurora-mysql", 3306),
+                ("aurora", 3306), ("mysql", 3306), ("mariadb", 3306), ("oracle", 1521),
+                ("sqlserver", 1433), ("db2", 50000))
+
+
+def engine_port(engine):
+    e = str(engine or "").lower()
+    for prefix, port in ENGINE_PORTS:
+        if e.startswith(prefix):
+            return port
+    return None
 
 
 def add_rds(snap, arn, identifier, vpc_id, subnets=(), az="", engine="", version="",
-            instance_class="", public=False, tags=None, source="aws") -> Node:
-    """Placed in the subnet from its subnet group that's in its zone."""
+            instance_class="", public=False, tags=None, source="aws", security_groups=None,
+            port=None) -> Node:
+    """Placed in the subnet from its subnet group that's in its zone. security_groups and
+    port are left out when the input doesn't have them; the port falls back to the
+    engine's default."""
     a, r = _in_vpc(snap, vpc_id)
     parent = ""
     for s in sorted(subnets):
@@ -830,12 +968,17 @@ def add_rds(snap, arn, identifier, vpc_id, subnets=(), az="", engine="", version
             break
     if not parent and subnets:
         parent = sorted(subnets)[0]
+    props = {"arn": arn, "vpc": vpc_id, "subnets": sorted(set(subnets)), "az": az,
+             "engine": engine, "version": version, "class": instance_class,
+             "public": bool(public)}
+    if security_groups is not None:
+        props["security_groups"] = sorted(set(g for g in security_groups if g))
+    port = _int_or_none(port) or engine_port(engine)
+    if port:
+        props["port"] = port
     return snap.add(Node(arn, "rds", identifier, parent=parent or vpc_id,
                          account=a or account_of_arn(arn), region=r or region_of_arn(arn),
-                         tags=dict(tags or {}), source=source, props={
-                             "arn": arn, "vpc": vpc_id, "subnets": sorted(set(subnets)),
-                             "az": az, "engine": engine, "version": version,
-                             "class": instance_class, "public": bool(public)}))
+                         tags=dict(tags or {}), source=source, props=props))
 
 
 def add_cgw(snap, cgw_id, account, region, ip="", asn="", name="", tags=None,

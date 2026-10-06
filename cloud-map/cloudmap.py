@@ -7,6 +7,7 @@
     awskit map remember  keep the layout of a .drawio edited in draw.io
     awskit map layout  show, tidy up or reset a snapshot's saved layout
     awskit map design  new, check, build or edit a design that becomes Terraform
+    awskit map reach   can A reach B on this port, and if not, what's blocking it
     awskit map         scan the current profile and draw it in one step
 
 Scanning and drawing are separate, so one scan can be drawn many ways.
@@ -267,6 +268,39 @@ def read_terraform(paths, plan=False, log=None):
                       known_accounts=load_config().get("known_accounts") or [])
 
 
+MAX_INPUT = 200 * 2 ** 20           # a snapshot or state file bigger than this is refused
+
+
+def load_input(path, plan=False, log=None):
+    """A snapshot, or Terraform read into one: a .cloudmap.json, `terraform show -json`
+    output, a .tfstate, a saved plan, or a folder (which runs terraform show, or plan
+    with plan=True). What awskit map reach takes."""
+    from . import maptf
+    p = Path(os.path.expanduser(str(path)))
+    if p.is_file():
+        try:
+            size = p.stat().st_size
+            with open(p, "rb") as fh:
+                head = fh.read(256).lstrip()[:1]
+        except OSError as exc:
+            raise mm.SnapshotError(f"Couldn't read {path}: {exc.strerror or exc}") from exc
+        if size > MAX_INPUT:
+            raise mm.SnapshotError(f"{p.name} is {size // 2 ** 20} MB, more than the "
+                                   f"{MAX_INPUT // 2 ** 20} MB a snapshot or state can be.")
+        if head == b"{":
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise mm.SnapshotError(f"{p.name} isn't valid JSON: {exc}") from exc
+            except RecursionError:
+                raise mm.SnapshotError(f"{p.name} is nested too deeply to be a snapshot or "
+                                       "Terraform state.") from None
+            if isinstance(data, dict) and data.get("format") == mm.FORMAT_NAME:
+                return mm.Snapshot.from_dict(data)
+            return maptf.build(data, p.name, load_config().get("known_accounts") or [])
+    return read_terraform([str(p)], plan=plan, log=log)
+
+
 def default_snapshot_name() -> str:
     return "cloud-map" + mm.SUFFIX
 
@@ -524,6 +558,55 @@ def cmd_edit(args) -> int:
     return 0
 
 
+REACH_COLORS = {"ok": "green", "reachable": "green", "blocked": "red", "unknown": "yellow",
+                "skipped": "dim"}
+
+
+def cmd_reach(args) -> int:
+    """Can FROM reach TO? Exit code 0 reachable, 3 blocked, 4 can't tell, 1 errors."""
+    from . import mapreach, maptf
+    from .common import table_text
+    log = (lambda m: print(color(m, "dim", sys.stderr.isatty()), file=sys.stderr))
+    try:
+        snap = load_input(args.source, plan=args.plan, log=log)
+    except (mm.SnapshotError, maptf.TfError, OSError) as exc:
+        err(str(exc))
+        return 1
+    if args.list:
+        try:
+            points = mapreach.endpoints(snap)
+        except mapreach.ReachError as exc:
+            err(str(exc))
+            return 1
+        rows = [{"kind": mm.NODE_KINDS.get(e.kind, e.kind) if e.kind != "internet" else "Internet",
+                 "name": e.title, "detail": e.detail, "key": e.key}
+                for e in points]
+        if args.json:
+            print(json.dumps([e.as_dict() for e in points], indent=2))
+        else:
+            print(table_text(rows, [("kind", "Kind"), ("name", "Name"), ("detail", "Where"),
+                                    ("key", "Give it as")], max_width=110))
+            print(color("Or give an IP, a CIDR, or internet (internet-ipv6 for IPv6).", "dim"))
+        return 0
+    if not args.frm or not args.to:
+        err("Give what to check from and to, like: awskit map reach SOURCE bastion internet "
+            "--port 22. --list shows what's there.")
+        return 1
+    try:
+        result = mapreach.check(snap, args.frm, args.to, args.protocol, args.port)
+    except mapreach.ReachError as exc:
+        err(str(exc))
+        return 1
+    if args.json:
+        print(json.dumps(result.as_dict(), indent=2, ensure_ascii=False))
+    else:
+        tty = sys.stdout.isatty()
+        print(mapreach.result_text(
+            result, lambda text, word: color(text, REACH_COLORS.get(word, ""), tty)
+            if REACH_COLORS.get(word) else text))
+    return result.exit_code
+
+
 def _print_problems(design, problems, region=None):
     from . import mapdesign
     where = region or design.region or "no region"
@@ -698,8 +781,8 @@ def build_parser(prog="awskit map") -> argparse.ArgumentParser:
                     "accounts, Identity Center, roles, trust) or a network map (VPCs, "
                     "subnets, routing). With no command, scans the current profile and "
                     "draws it in one step.",
-        epilog="Commands: scan, tf, export, edit, remember, layout, design. Each has its own --help, like: "
-               f"{prog} export --help")
+        epilog="Commands: scan, tf, export, edit, remember, layout, design, reach. Each has its "
+               f"own --help, like: {prog} export --help")
     sub = p.add_subparsers(dest="action", metavar="COMMAND")
 
     def add_profiles(sp):
@@ -845,6 +928,33 @@ def build_parser(prog="awskit map") -> argparse.ArgumentParser:
                           "layout wants it")
     act.add_argument("--reset", action="store_true", help="Forget this map's layout")
     lo.set_defaults(func=cmd_layout)
+
+    rc = sub.add_parser(
+        "reach", help="Can one thing reach another on a port, and if not, what's blocking it",
+        description="Walks security groups, network ACLs and route tables in a snapshot or "
+                    "Terraform, offline: the source's security groups and network ACL, the "
+                    "route (peering, transit gateway, internet or NAT gateway), the "
+                    "destination's network ACL and security groups, and the replies. Free, "
+                    "and it never calls AWS.",
+        epilog="FROM and TO are an instance, load balancer, database or subnet (by ID or "
+               "name), an IP, a CIDR, or internet (internet-ipv6 for IPv6). Exit codes: 0 "
+               "reachable, 3 blocked, 4 can't tell (something on the way couldn't be checked), "
+               "1 errors.")
+    rc.add_argument("source", metavar="SOURCE",
+                    help="A .cloudmap.json snapshot, Terraform state or plan JSON, a .tfstate, a "
+                         "saved plan, or a Terraform folder")
+    rc.add_argument("frm", metavar="FROM", nargs="?", help="Where the traffic starts")
+    rc.add_argument("to", metavar="TO", nargs="?", help="Where it's going")
+    rc.add_argument("--port", type=int, default=443,
+                    help="Destination port for tcp and udp (default 443)")
+    rc.add_argument("--protocol", default="tcp", choices=("tcp", "udp", "icmp", "all"),
+                    help="tcp (default), udp, icmp (ping) or all (every protocol and port)")
+    rc.add_argument("--json", action="store_true", help="The result as JSON")
+    rc.add_argument("--list", action="store_true",
+                    help="List what can be checked from and to, then stop")
+    rc.add_argument("--plan", action="store_true",
+                    help="For a Terraform folder, check what terraform plan would build")
+    rc.set_defaults(func=cmd_reach)
 
     p.add_argument("--type", dest="one_type", default="access", choices=maplayout.MAP_TYPES,
                    help="One step: map type to scan and draw (default access)")

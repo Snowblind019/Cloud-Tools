@@ -30,18 +30,23 @@ from . import profiles  # noqa: E402
 from .common import (APP_ID, APP_NAME, CURRENT_PROFILE_FILE, IMAGE_APP_ID,  # noqa: E402
                      PICKER_APP_ID, REDACT_APP_ID, REDACT_SETTINGS_APP_ID, VERSION)
 from .audit_page import AuditPage  # noqa: E402
+from .creds_page import CredsPage  # noqa: E402
+from .drift_page import DriftPage  # noqa: E402
 from .image_page import ImagePage, ImageWindow  # noqa: E402
+from .leastpriv_page import LeastPrivPage  # noqa: E402
 from .map_page import MapPage  # noqa: E402
 from .plan_page import PlanPage  # noqa: E402
 from .policy_page import PolicyPage  # noqa: E402
 from .profiles_page import PickerWindow, ProfilesPage  # noqa: E402
 from .redact_page import RedactPage, RedactSettingsWindow, RedactWindow  # noqa: E402
+from .scp_page import ScpPage  # noqa: E402
+from .secrets_page import SecretsPage  # noqa: E402
 from .sweep_page import SweepPage  # noqa: E402
 from .trail_page import TrailPage  # noqa: E402
 from .widgets import button, clear_box, hbox, install_css, label, margins, vbox  # noqa: E402
 
-PAGE_CLASSES = [RedactPage, ImagePage, SweepPage, AuditPage, TrailPage, PlanPage, PolicyPage,
-                ProfilesPage, MapPage]
+PAGE_CLASSES = [RedactPage, ImagePage, SecretsPage, SweepPage, AuditPage, CredsPage, TrailPage,
+                LeastPrivPage, PlanPage, DriftPage, PolicyPage, ScpPage, ProfilesPage, MapPage]
 PAGES = [cls.name for cls in PAGE_CLASSES]
 
 # Small windows that open on their own, for keybinds and launcher entries.
@@ -68,8 +73,9 @@ class MainWindow(Gtk.ApplicationWindow):
         about_box = vbox(4)
         margins(about_box, 10)
         about_box.append(label(f"{APP_NAME} {VERSION}", "heading"))
-        about_box.append(label(f"Ctrl+1 to Ctrl+{len(PAGE_CLASSES)} switch pages.\nEvery tool also runs in the "
-                               "terminal: awskit --help", "dim-label"))
+        about_box.append(label("Ctrl+1 to Ctrl+9 open the first nine pages, and Ctrl+Page Up "
+                               "and Ctrl+Page Down go through all of them.\nEvery tool also runs "
+                               "in the terminal: awskit --help", "dim-label", wrap=True))
         about_pop.set_child(about_box)
         about.set_popover(about_pop)
         header.pack_end(about)
@@ -95,10 +101,14 @@ class MainWindow(Gtk.ApplicationWindow):
 
         shortcuts = Gtk.ShortcutController()
         shortcuts.set_scope(Gtk.ShortcutScope.GLOBAL)
-        for n, cls in enumerate(PAGE_CLASSES, 1):
+        for n, cls in enumerate(PAGE_CLASSES[:9], 1):
             shortcuts.add_shortcut(Gtk.Shortcut(
                 trigger=Gtk.ShortcutTrigger.parse_string(f"<Control>{n}"),
                 action=Gtk.CallbackAction.new(self._goto, cls.name)))
+        for key, step in (("Page_Down", 1), ("Page_Up", -1)):
+            shortcuts.add_shortcut(Gtk.Shortcut(
+                trigger=Gtk.ShortcutTrigger.parse_string(f"<Control>{key}"),
+                action=Gtk.CallbackAction.new(self._step, step)))
         self.add_controller(shortcuts)
 
         # Follow profile switches made from a terminal with awsp.
@@ -111,6 +121,13 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _goto(self, widget, args, name):
         self.show_page(name)
+        return True
+
+    def _step(self, widget, args, step):
+        names = [cls.name for cls in PAGE_CLASSES]
+        current = self.stack.get_visible_child_name()
+        i = names.index(current) if current in names else 0
+        self.show_page(names[(i + step) % len(names)])
         return True
 
     def show_page(self, name):

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from gi.repository import Gdk, GLib, Gtk, Pango
 
-from . import cloudmap, maplayout, maplayoutmem, maprender
+from . import cloudmap, maplayout, maplayoutmem, mapreach, maprender
 from . import mapmodel as mm
 from .map_edit import EditController
 from .common import error_text, load_config, save_config
@@ -76,6 +76,7 @@ class MapCanvas(Gtk.DrawingArea):
         self.selected = None             # box id
         self.selected_link = None
         self.hover = None
+        self.path = None                 # reachability: (box ids, link ids, blocked box ids)
         self.on_select = on_select
         self.on_activate = on_activate
         self.pointer = None
@@ -299,6 +300,12 @@ class MapCanvas(Gtk.DrawingArea):
                 cr.restore()
         if not stretching and not self.prefetch_id:
             self.prefetch_id = GLib.idle_add(self._prefetch, priority=GLib.PRIORITY_LOW)
+        if self.path:
+            cr.save()
+            cr.scale(self.zoom, self.zoom)
+            cr.translate(-self.ox, -self.oy)
+            scene.draw_path(cr, *self.path, px=1 / self.zoom)
+            cr.restore()
         if self.selected or self.selected_link or self.hover:
             cr.save()
             cr.scale(self.zoom, self.zoom)
@@ -446,6 +453,8 @@ class MapPage(Page):
         self._restoring = False
         self.editing = EditController(self)
         self.mode = "map"              # or "design"
+        self.reach_points = []         # mapreach.Endpoint list for the From and To pickers
+        self.reach_result = None
         self.design = None
         self.design_path = None
         self.design_out = None         # where Build writes, when not the default
@@ -593,6 +602,8 @@ class MapPage(Page):
         box.append(map_box)
         outer_box, box = box, map_box
 
+        box.append(self._reach_controls())
+
         box.append(self._section("Layout"))
         self.layout_label = label("Automatic layout.", "dim-label", wrap=True)
         box.append(self.layout_label)
@@ -636,6 +647,269 @@ class MapPage(Page):
         scroller.set_child(outer_box)
         scroller.set_size_request(230, -1)
         return scroller
+
+    def _reach_controls(self):
+        box = vbox(6)
+        box.append(self._section("Reachability"))
+        box.append(label("Can one thing reach another? Walks the security groups, network "
+                         "ACLs and routes on this map, offline.", "dim-label", wrap=True))
+        self.reach_from = self._reach_picker()
+        self.reach_to = self._reach_picker()
+        self.reach_to.connect("notify::selected", lambda *_: self._reach_default_port())
+        for text, picker in (("From", self.reach_from), ("To", self.reach_to)):
+            row = hbox(6)
+            lab = label(text, "dim-label")
+            lab.set_size_request(38, -1)
+            row.append(lab)
+            picker.set_hexpand(True)
+            row.append(picker)
+            box.append(row)
+        row = hbox(6)
+        self.reach_proto = string_dropdown(["TCP", "UDP", "ICMP", "All"])
+        self.reach_proto.connect("notify::selected", lambda *_: self.reach_port.set_sensitive(
+            self.reach_proto.get_selected() < 2))
+        row.append(self.reach_proto)
+        self.reach_port = Gtk.Entry(text="443", placeholder_text="Port")
+        self.reach_port.set_width_chars(6)
+        self.reach_port.set_hexpand(True)
+        self.reach_port.connect("activate", lambda *_: self.check_reach())
+        row.append(self.reach_port)
+        box.append(row)
+        row = hbox(6)
+        self.reach_btn = button("Check", self.check_reach,
+                                "Checks the path both ways: security groups, network ACLs "
+                                "(and their replies), routes and gateways", css="suggested-action")
+        self.reach_btn.set_hexpand(True)
+        row.append(self.reach_btn)
+        self.reach_clear = button("Clear", self.clear_reach, "Take the path off the map")
+        self.reach_clear.set_sensitive(False)
+        row.append(self.reach_clear)
+        box.append(row)
+        self.reach_box = box
+        box.set_sensitive(False)
+        return box
+
+    def _reach_picker(self):
+        """A searchable dropdown whose button shortens long names, so the controls column
+        keeps its width. The open list shows them in full."""
+        dd = Gtk.DropDown.new_from_strings([])
+        dd.set_enable_search(True)
+        dd.set_expression(Gtk.PropertyExpression.new(Gtk.StringObject, None, "string"))
+
+        def setup(factory, item, short):
+            lab = Gtk.Label(xalign=0)
+            if short:
+                lab.set_ellipsize(Pango.EllipsizeMode.END)
+                lab.set_width_chars(8)
+                lab.set_max_width_chars(14)
+            item.set_child(lab)
+
+        def bind(factory, item):
+            item.get_child().set_text(item.get_item().get_string())
+        for short, setter in ((True, dd.set_factory), (False, dd.set_list_factory)):
+            f = Gtk.SignalListItemFactory()
+            f.connect("setup", setup, short)
+            f.connect("bind", bind)
+            setter(f)
+
+        def tip(*_):
+            obj = dd.get_selected_item()
+            dd.set_tooltip_text(obj.get_string() if obj is not None else None)
+        dd.connect("notify::selected", tip)
+        return dd
+
+    def fill_reach(self):
+        """The From and To lists, from what's on the current map."""
+        points = []
+        if self.snap is not None:
+            try:
+                points = mapreach.endpoints(self.snap)
+            except Exception:  # noqa: BLE001 - an odd snapshot just means nothing to pick
+                points = []
+        old_from, old_to = self._reach_key(self.reach_from), self._reach_key(self.reach_to)
+        self.reach_points = points
+        labels = [p.label for p in points]
+        for dd, old, default in ((self.reach_from, old_from, 0),
+                                 (self.reach_to, old_to, 1 if len(points) > 1 else 0)):
+            dd.set_model(Gtk.StringList.new(labels))
+            keys = [p.key for p in points]
+            dd.set_selected(keys.index(old) if old in keys else (default if points else
+                                                               Gtk.INVALID_LIST_POSITION))
+        has_network = any(p.kind in ("instance", "lb", "rds", "subnet") for p in points)
+        self.reach_box.set_sensitive(has_network)
+        self.clear_reach()
+
+    def _reach_key(self, dd):
+        i = dd.get_selected()
+        if 0 <= i < len(self.reach_points):
+            return self.reach_points[i].key
+        return None
+
+    def _reach_point(self, dd):
+        i = dd.get_selected()
+        return self.reach_points[i] if 0 <= i < len(self.reach_points) else None
+
+    def _reach_default_port(self):
+        dst = self._reach_point(self.reach_to)
+        if dst is None:
+            return
+        try:
+            port = mapreach.default_port(dst)
+        except Exception:  # noqa: BLE001
+            port = None
+        if port:
+            self.reach_port.set_text(str(port))
+
+    def reach_from_here(self, which):
+        """From here / To here in the details panel, for the selected box."""
+        node = self._detail_node
+        if node is None:
+            return
+        keys = [p.node_id for p in self.reach_points]
+        if node.id not in keys:
+            return
+        (self.reach_from if which == "from" else self.reach_to).set_selected(keys.index(node.id))
+
+    def check_reach(self):
+        if self.snap is None:
+            return
+        src, dst = self._reach_point(self.reach_from), self._reach_point(self.reach_to)
+        if src is None or dst is None:
+            self.status.idle("Pick where from and where to.")
+            return
+        protocol = ("tcp", "udp", "icmp", "all")[self.reach_proto.get_selected()]
+        port = None
+        if protocol in ("tcp", "udp"):
+            text = self.reach_port.get_text().strip()
+            if not text.isdecimal() or not 0 <= int(text) <= 65535:
+                show_message(self.win, "That isn't a port", "Type a port number from 0 to 65535.")
+                self.reach_port.grab_focus()
+                return
+            port = int(text)
+        try:
+            result = mapreach.check(self.snap, src, dst, protocol=protocol, port=port)
+        except mapreach.ReachError as exc:
+            show_message(self.win, "Can't check that", str(exc))
+            return
+        self.show_reach(result)
+
+    def show_reach(self, result, move=True):
+        self.reach_result = result
+        scene = self.canvas.scene
+        boxes, bad = [], []
+        if scene is not None:
+            by_aws = {b.attrs.get("aws_id", b.id): b.id for b in scene.lay.boxes}
+            for node_id in result.path_nodes:
+                bid = by_aws.get(node_id, node_id)
+                if bid in scene.rects and bid not in boxes:
+                    boxes.append(bid)
+            hop = result.blocked_hop
+            if hop is not None:
+                for node_id in self._blocked_boxes(result, hop):
+                    bid = by_aws.get(node_id, node_id)
+                    if bid in scene.rects and bid not in bad:
+                        bad.append(bid)
+                        break
+            links = [eid for eid in result.path_edges if eid in scene.links]
+        else:
+            links = []
+        self.canvas.path = (boxes, links, bad)
+        self.canvas.select(None, None, notify=False)
+        self.canvas.queue_draw()
+        self.reach_clear.set_sensitive(True)
+        clear_box(self.d_flags)
+        title = {"reachable": "Reachable", "blocked": "Partly blocked" if result.partial else
+                 "Blocked", "unknown": "Can't tell"}.get(result.verdict, result.verdict)
+        self.d_title.set_text(title)
+        for css in ("ok-text", "bad-text", "warn-text"):
+            self.d_title.remove_css_class(css)
+        self.d_title.add_css_class({"reachable": "ok-text", "blocked": "bad-text"}.get(
+            result.verdict, "warn-text"))
+        self.d_kind.set_text(f"Reachability, {result.traffic}")
+        self.d_kind.set_tooltip_text(None)
+        self.d_caption.set_text(result.summary)
+        self._reach_text(result)
+        self.copy_id.set_visible(False)
+        self.copy_arn.set_visible(False)
+        self.reach_here.set_visible(False)
+        self._detail_node = None
+        if move and bad:
+            self.canvas.show_box(bad[0])
+        if move:
+            self.status.idle(f"{title}: {result.summary}")
+
+    def _blocked_boxes(self, result, hop):
+        """Where to put the red outline, best first. Security groups and network ACLs are
+        often not drawn, so fall back to the host or subnet they guard."""
+        out = [hop.node_id] if hop.node_id else []
+        node = self.snap.get(hop.node_id) if (self.snap and hop.node_id) else None
+        kind = node.kind if node is not None else ""
+        if kind == "sg" or hop.kind.startswith("sg"):
+            ends = [result.destination, result.source] if hop.kind == "sg-in" else \
+                [result.source, result.destination]
+            for ep in ends:
+                if ep.node_id and (not hop.node_id or hop.node_id in (ep.security_groups or [])):
+                    out.append(ep.node_id)
+        elif kind == "nacl":
+            guarded = set(node.props.get("subnets") or [])
+            out += [n for n in result.path_nodes if n in guarded]
+        return out
+
+    def _reach_text(self, result):
+        """The hops in the details panel: a colored status word and title per hop, with the
+        reason indented under it. Copy gives the same text as awskit map reach."""
+        self.detail.set_text(" ")
+        self.detail.text = mapreach.result_text(result)
+        buf = self.detail.view.get_buffer()
+        buf.set_text("")
+        table = buf.get_tag_table()
+
+        def tag(name, **props):
+            t = table.lookup(name)
+            if t is None:
+                t = Gtk.TextTag(name=name, **props)
+                table.add(t)
+            return t
+        bold = tag("reach-bold", weight=700)
+        head = tag("reach-head", weight=700, pixels_above_lines=8)
+        body = tag("reach-body", left_margin=26, pixels_below_lines=4)
+        colors = {"ok": tag("reach-ok", foreground="#26a269", weight=700),
+                  "blocked": tag("reach-blocked", foreground="#e01b24", weight=700),
+                  "unknown": tag("reach-unknown", foreground="#e66100", weight=700),
+                  "skipped": tag("reach-skipped", foreground="#77767b", weight=700)}
+
+        def put(text, *tags):
+            buf.insert_with_tags(buf.get_end_iter(), text, *tags)
+        for name, ep in (("From", result.source), ("To", result.destination)):
+            put(f"{name}  ", bold)
+            put(ep.label + "\n")
+        put("Over  ", bold)
+        put(result.traffic + "\n")
+        for leg, heading in (("there", "On the way there"), ("back", "Replies")):
+            hops = [h for h in result.hops if h.leg == leg]
+            if not hops:
+                continue
+            put("\n" + heading + "\n", head)
+            for h in hops:
+                word = "PARTLY" if h.partial and h.status == "blocked" else h.status.upper()
+                put(f"{word}  ", colors.get(h.status, bold))
+                put(h.title + "\n", bold)
+                put(h.reason + "\n", body)
+                if h.fix:
+                    put("To allow it: " + h.fix + "\n", body)
+        if result.notes:
+            put("\nNotes\n", head)
+            for n in result.notes:
+                put("- " + n + "\n", body)
+
+    def clear_reach(self):
+        self.reach_result = None
+        if getattr(self, "canvas", None) is not None and self.canvas.path:
+            self.canvas.path = None
+            self.canvas.queue_draw()
+            self.clear_details()
+        if getattr(self, "reach_clear", None) is not None:
+            self.reach_clear.set_sensitive(False)
 
     def _design_controls(self):
         box = vbox(6)
@@ -713,6 +987,14 @@ class MapPage(Page):
             b.add_css_class("flat")
             copy_row.append(b)
         head.append(copy_row)
+        self.reach_here = hbox(6)
+        for text, which in (("Reach from here", "from"), ("Reach to here", "to")):
+            b = button(text, lambda w=which: self.reach_from_here(w),
+                       "Use this as the start or the end of a reachability check")
+            b.add_css_class("flat")
+            self.reach_here.append(b)
+        self.reach_here.set_visible(False)
+        head.append(self.reach_here)
         self.copy_id.set_visible(False)
         self.copy_arn.set_visible(False)
         self.detail.set_vexpand(True)
@@ -922,6 +1204,7 @@ class MapPage(Page):
         self.source_label.set_text("\n".join(lines))
         self.source_label.set_tooltip_text(str(self.snap_path or ""))
         self._fill_filters()
+        self.fill_reach()
         warnings = list(snap.warnings)
         self.warn_label.set_text("\n".join(warnings[:8]) + (
             f"\nand {len(warnings) - 8} more, in the footnote" if len(warnings) > 8 else ""))
@@ -1017,6 +1300,8 @@ class MapPage(Page):
                          f"Drew at {datetime.now():%H:%M}.")
         if self.canvas.selected or self.canvas.selected_link:
             self.selected(self.canvas.selected, self.canvas.selected_link)
+        elif self.reach_result is not None:
+            self.show_reach(self.reach_result, move=False)    # the new layout's boxes
         else:
             self.clear_details()
         icons = scene.icons
@@ -1032,6 +1317,8 @@ class MapPage(Page):
     def set_mode(self, mode):
         self.mode = mode
         design = mode == "design"
+        if design:
+            self.clear_reach()
         self.design_box.set_visible(design)
         self.map_only.set_visible(not design)
         self.type_dd.set_sensitive(not design)
@@ -1332,6 +1619,9 @@ class MapPage(Page):
 
     # ---- details
     def clear_details(self):
+        for css in ("ok-text", "bad-text", "warn-text"):
+            self.d_title.remove_css_class(css)
+        self.reach_here.set_visible(False)
         self.d_title.set_text("Nothing selected")
         self.d_kind.set_text("Click a box or a line on the map.")
         self.d_caption.set_text("")
@@ -1342,6 +1632,9 @@ class MapPage(Page):
         self._detail_node = None
 
     def selected(self, box_id, link_id):
+        for css in ("ok-text", "bad-text", "warn-text"):
+            self.d_title.remove_css_class(css)
+        self.reach_here.set_visible(False)
         if box_id is None and link_id is None:
             self.clear_details()
             return
@@ -1398,6 +1691,8 @@ class MapPage(Page):
         self.detail.set_text("\n".join(lines))
         self.copy_id.set_visible(node is not None)
         self.copy_arn.set_visible(bool(node is not None and node.props.get("arn")))
+        self.reach_here.set_visible(node is not None and self.reach_box.get_sensitive() and
+                                    any(p.node_id == node.id for p in self.reach_points))
 
     def show_link(self, link):
         if link is None:

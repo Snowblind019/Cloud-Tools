@@ -7,8 +7,9 @@ common.py and widgets.py.
 """
 import os as _os
 
-TOOL_DIRS = ("pii-redact", "image-redact", "lab-sweep", "exposure-audit", "cloudtrail",
-             "plan-check", "policy-check", "profiles", "cloud-map")
+TOOL_DIRS = ("pii-redact", "image-redact", "secrets-scan", "lab-sweep", "exposure-audit",
+             "credentials", "cloudtrail", "least-privilege", "plan-check", "drift",
+             "policy-check", "org-scps", "profiles", "cloud-map")
 
 _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 for _name in TOOL_DIRS:

@@ -226,8 +226,12 @@ EC2_PREFIXES = (
 
 # When two rules match the exact same text, the one higher up names it.
 RULES = [
+    # The body can't hold another BEGIN line and is at most 64 KB (a 16384-bit RSA key in
+    # PEM is about 12 KB), so a BEGIN line without an END line only reads on to the next
+    # BEGIN line. Reading to the end of the text for each one made a crafted text of
+    # thousands of BEGIN lines take seconds to minutes.
     R("private_keys", "PrivateKey",
-      r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?"
+      r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN ).){0,65536}?"
       r"-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----", flags=re.S),
     # A key pasted without its END line: the header lines and base64 lines after BEGIN,
     # up to the first line that isn't base64. Also catches a key flattened onto one line.

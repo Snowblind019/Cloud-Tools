@@ -1,0 +1,280 @@
+{
+  "format": "awskit-org-scps",
+  "format_version": 1,
+  "saved_at": "2026-10-05T14:21:00Z",
+  "source": "aws",
+  "label": "profile lab-mgmt",
+  "read_at": "2026-10-05T14:20:00Z",
+  "organization": {
+    "id": "o-k3x9p2m7q1",
+    "arn": "arn:aws:organizations::111111111111:organization/o-k3x9p2m7q1",
+    "management_account": "111111111111",
+    "feature_set": "ALL",
+    "root": "r-k3x9",
+    "enabled_policy_types": [
+      "RESOURCE_CONTROL_POLICY",
+      "SERVICE_CONTROL_POLICY"
+    ],
+    "unreadable_policy_types": []
+  },
+  "nodes": [
+    {
+      "id": "r-k3x9",
+      "kind": "root",
+      "name": "Root",
+      "parent": "",
+      "arn": "arn:aws:organizations::111111111111:root/o-k3x9p2m7q1/r-k3x9",
+      "status": "",
+      "policies": [
+        "p-FullAWSAccess",
+        "p-RCPFullAWSAccess",
+        "p-dl7q2m4x",
+        "p-ps8k3n5w",
+        "p-rc5m8n1q"
+      ],
+      "assumed_policies": [],
+      "guessed_parent": false
+    },
+    {
+      "id": "ou-k3x9-snd10001",
+      "kind": "ou",
+      "name": "Sandbox",
+      "parent": "r-k3x9",
+      "arn": "arn:aws:organizations::111111111111:ou/o-k3x9p2m7q1/ou-k3x9-snd10001",
+      "status": "",
+      "policies": [
+        "p-RCPFullAWSAccess",
+        "p-sa2w6e4r"
+      ],
+      "assumed_policies": [],
+      "guessed_parent": false
+    },
+    {
+      "id": "777777777777",
+      "kind": "account",
+      "name": "playground",
+      "parent": "ou-k3x9-snd10001",
+      "arn": "arn:aws:organizations::111111111111:account/o-k3x9p2m7q1/777777777777",
+      "status": "ACTIVE",
+      "policies": [
+        "p-FullAWSAccess",
+        "p-RCPFullAWSAccess"
+      ],
+      "assumed_policies": [],
+      "guessed_parent": false
+    },
+    {
+      "id": "ou-k3x9-sec10001",
+      "kind": "ou",
+      "name": "Security",
+      "parent": "r-k3x9",
+      "arn": "arn:aws:organizations::111111111111:ou/o-k3x9p2m7q1/ou-k3x9-sec10001",
+      "status": "",
+      "policies": [
+        "p-FullAWSAccess",
+        "p-RCPFullAWSAccess"
+      ],
+      "assumed_policies": [],
+      "guessed_parent": false
+    },
+    {
+      "id": "444444444444",
+      "kind": "account",
+      "name": "audit",
+      "parent": "ou-k3x9-sec10001",
+      "arn": "arn:aws:organizations::111111111111:account/o-k3x9p2m7q1/444444444444",
+      "status": "ACTIVE",
+      "policies": [
+        "p-FullAWSAccess",
+        "p-RCPFullAWSAccess"
+      ],
+      "assumed_policies": [],
+      "guessed_parent": false
+    },
+    {
+      "id": "333333333333",
+      "kind": "account",
+      "name": "log-archive",
+      "parent": "ou-k3x9-sec10001",
+      "arn": "arn:aws:organizations::111111111111:account/o-k3x9p2m7q1/333333333333",
+      "status": "ACTIVE",
+      "policies": [
+        "p-FullAWSAccess",
+        "p-RCPFullAWSAccess"
+      ],
+      "assumed_policies": [],
+      "guessed_parent": false
+    },
+    {
+      "id": "ou-k3x9-wrk10001",
+      "kind": "ou",
+      "name": "Workloads",
+      "parent": "r-k3x9",
+      "arn": "arn:aws:organizations::111111111111:ou/o-k3x9p2m7q1/ou-k3x9-wrk10001",
+      "status": "",
+      "policies": [
+        "p-FullAWSAccess",
+        "p-RCPFullAWSAccess",
+        "p-nu6t1r8y",
+        "p-rl4v9c2b"
+      ],
+      "assumed_policies": [],
+      "guessed_parent": false
+    },
+    {
+      "id": "ou-k3x9-dev10001",
+      "kind": "ou",
+      "name": "Dev",
+      "parent": "ou-k3x9-wrk10001",
+      "arn": "arn:aws:organizations::111111111111:ou/o-k3x9p2m7q1/ou-k3x9-dev10001",
+      "status": "",
+      "policies": [
+        "p-FullAWSAccess",
+        "p-RCPFullAWSAccess"
+      ],
+      "assumed_policies": [],
+      "guessed_parent": false
+    },
+    {
+      "id": "666666666666",
+      "kind": "account",
+      "name": "shop-dev",
+      "parent": "ou-k3x9-dev10001",
+      "arn": "arn:aws:organizations::111111111111:account/o-k3x9p2m7q1/666666666666",
+      "status": "ACTIVE",
+      "policies": [
+        "p-FullAWSAccess",
+        "p-RCPFullAWSAccess"
+      ],
+      "assumed_policies": [],
+      "guessed_parent": false
+    },
+    {
+      "id": "ou-k3x9-prd10001",
+      "kind": "ou",
+      "name": "Prod",
+      "parent": "ou-k3x9-wrk10001",
+      "arn": "arn:aws:organizations::111111111111:ou/o-k3x9p2m7q1/ou-k3x9-prd10001",
+      "status": "",
+      "policies": [
+        "p-FullAWSAccess",
+        "p-RCPFullAWSAccess",
+        "p-pd3h7j9k"
+      ],
+      "assumed_policies": [],
+      "guessed_parent": false
+    },
+    {
+      "id": "555555555555",
+      "kind": "account",
+      "name": "shop-prod",
+      "parent": "ou-k3x9-prd10001",
+      "arn": "arn:aws:organizations::111111111111:account/o-k3x9p2m7q1/555555555555",
+      "status": "ACTIVE",
+      "policies": [
+        "p-FullAWSAccess",
+        "p-RCPFullAWSAccess"
+      ],
+      "assumed_policies": [],
+      "guessed_parent": false
+    },
+    {
+      "id": "111111111111",
+      "kind": "account",
+      "name": "lab-mgmt",
+      "parent": "r-k3x9",
+      "arn": "arn:aws:organizations::111111111111:account/o-k3x9p2m7q1/111111111111",
+      "status": "ACTIVE",
+      "policies": [
+        "p-FullAWSAccess",
+        "p-RCPFullAWSAccess"
+      ],
+      "assumed_policies": [],
+      "guessed_parent": false
+    }
+  ],
+  "policies": [
+    {
+      "id": "p-FullAWSAccess",
+      "name": "FullAWSAccess",
+      "type": "SERVICE_CONTROL_POLICY",
+      "description": "Allows access to every operation",
+      "aws_managed": true,
+      "content": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Effect\": \"Allow\",\n      \"Action\": \"*\",\n      \"Resource\": \"*\"\n    }\n  ]\n}",
+      "error": ""
+    },
+    {
+      "id": "p-RCPFullAWSAccess",
+      "name": "RCPFullAWSAccess",
+      "type": "RESOURCE_CONTROL_POLICY",
+      "description": "Allows access to every resource",
+      "aws_managed": true,
+      "content": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Effect\": \"Allow\",\n      \"Principal\": \"*\",\n      \"Action\": \"*\",\n      \"Resource\": \"*\"\n    }\n  ]\n}",
+      "error": ""
+    },
+    {
+      "id": "p-dl7q2m4x",
+      "name": "deny-leave-org",
+      "type": "SERVICE_CONTROL_POLICY",
+      "description": "Accounts can't leave the organization",
+      "aws_managed": false,
+      "content": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"NoLeaving\",\n      \"Effect\": \"Deny\",\n      \"Action\": \"organizations:LeaveOrganization\",\n      \"Resource\": \"*\"\n    }\n  ]\n}",
+      "error": ""
+    },
+    {
+      "id": "p-nu6t1r8y",
+      "name": "no-iam-users",
+      "type": "SERVICE_CONTROL_POLICY",
+      "description": "Use Identity Center and roles, not IAM users",
+      "aws_managed": false,
+      "content": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"NoLongLivedKeys\",\n      \"Effect\": \"Deny\",\n      \"Action\": [\n        \"iam:CreateUser\",\n        \"iam:CreateAccessKey\"\n      ],\n      \"Resource\": \"*\"\n    }\n  ]\n}",
+      "error": ""
+    },
+    {
+      "id": "p-pd3h7j9k",
+      "name": "prod-no-deletes",
+      "type": "SERVICE_CONTROL_POLICY",
+      "description": "Only break-glass can delete data stores in prod",
+      "aws_managed": false,
+      "content": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"ProtectData\",\n      \"Effect\": \"Deny\",\n      \"Action\": [\n        \"s3:DeleteBucket\",\n        \"rds:DeleteDBInstance\",\n        \"rds:DeleteDBCluster\",\n        \"dynamodb:DeleteTable\"\n      ],\n      \"Resource\": \"*\",\n      \"Condition\": {\n        \"StringNotLike\": {\n          \"aws:PrincipalArn\": \"arn:aws:iam::*:role/break-glass\"\n        }\n      }\n    }\n  ]\n}",
+      "error": ""
+    },
+    {
+      "id": "p-ps8k3n5w",
+      "name": "protect-security-tools",
+      "type": "SERVICE_CONTROL_POLICY",
+      "description": "Only the org access role can turn off logging",
+      "aws_managed": false,
+      "content": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"KeepLoggingOn\",\n      \"Effect\": \"Deny\",\n      \"Action\": [\n        \"cloudtrail:StopLogging\",\n        \"cloudtrail:DeleteTrail\",\n        \"cloudtrail:UpdateTrail\",\n        \"guardduty:DeleteDetector\",\n        \"config:StopConfigurationRecorder\",\n        \"config:DeleteConfigurationRecorder\"\n      ],\n      \"Resource\": \"*\",\n      \"Condition\": {\n        \"StringNotLike\": {\n          \"aws:PrincipalArn\": \"arn:aws:iam::*:role/OrganizationAccountAccessRole\"\n        }\n      }\n    }\n  ]\n}",
+      "error": ""
+    },
+    {
+      "id": "p-rc5m8n1q",
+      "name": "s3-https-only",
+      "type": "RESOURCE_CONTROL_POLICY",
+      "description": "S3 requests have to use HTTPS",
+      "aws_managed": false,
+      "content": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"DenyPlainHttp\",\n      \"Effect\": \"Deny\",\n      \"Principal\": \"*\",\n      \"Action\": \"s3:*\",\n      \"Resource\": \"*\",\n      \"Condition\": {\n        \"Bool\": {\n          \"aws:SecureTransport\": \"false\"\n        }\n      }\n    }\n  ]\n}",
+      "error": ""
+    },
+    {
+      "id": "p-rl4v9c2b",
+      "name": "region-lock",
+      "type": "SERVICE_CONTROL_POLICY",
+      "description": "Workloads run in us-east-1 and us-west-2 only",
+      "aws_managed": false,
+      "content": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"OnlyTwoRegions\",\n      \"Effect\": \"Deny\",\n      \"NotAction\": [\n        \"iam:*\",\n        \"organizations:*\",\n        \"sts:*\",\n        \"support:*\",\n        \"budgets:*\",\n        \"ce:*\",\n        \"cloudfront:*\",\n        \"route53:*\"\n      ],\n      \"Resource\": \"*\",\n      \"Condition\": {\n        \"StringNotEquals\": {\n          \"aws:RequestedRegion\": [\n            \"us-east-1\",\n            \"us-west-2\"\n          ]\n        }\n      }\n    }\n  ]\n}",
+      "error": ""
+    },
+    {
+      "id": "p-sa2w6e4r",
+      "name": "sandbox-allow-list",
+      "type": "SERVICE_CONTROL_POLICY",
+      "description": "Sandbox gets a short list of services",
+      "aws_managed": false,
+      "content": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"SandboxServices\",\n      \"Effect\": \"Allow\",\n      \"Action\": [\n        \"ec2:*\",\n        \"s3:*\",\n        \"lambda:*\",\n        \"logs:*\",\n        \"cloudwatch:*\",\n        \"dynamodb:*\",\n        \"iam:Get*\",\n        \"iam:List*\",\n        \"sts:*\"\n      ],\n      \"Resource\": \"*\"\n    }\n  ]\n}",
+      "error": ""
+    }
+  ],
+  "notes": []
+}

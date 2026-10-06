@@ -14,9 +14,14 @@ from pathlib import Path
 from .common import (APP_ID, APP_NAME, IMAGE_APP_ID, PICKER_APP_ID, REDACT_APP_ID,
                      REDACT_SETTINGS_APP_ID, SEVERITY_COLOR, SEVERITY_ORDER, VERSION,
                      AuthError, ClipboardError, color, load_config, money, notify, parse_when,
-                     pii_redact, table_text, to_markdown, write_clipboard)
+                     pii_redact, table_text, terminal_safe, to_markdown, write_clipboard)
 
-PAGES = ("redact", "image", "sweep", "audit", "trail", "plan", "policy", "profiles", "map")
+PAGES = ("redact", "image", "secrets", "sweep", "audit", "creds", "trail", "leastpriv", "plan",
+         "drift", "policy", "scp", "profiles", "map")
+
+# Tools that keep their command line in their own module. Each has
+# register_cli(sub, add_profiles), which adds its subcommand and sets func.
+CLI_MODULES = ("secretscan", "creds", "leastpriv", "drift", "scpcheck")
 
 
 def err(msg):
@@ -434,8 +439,8 @@ def cmd_audit(args) -> int:
 
 # =================================================================== trail
 
-TRAIL_COLS = [("time", "Time"), ("who", "Who"), ("action", "Action"), ("resources", "Resource"),
-              ("result", "Result"), ("ip", "Source IP")]
+TRAIL_COLS = [("flag", "Flag"), ("time", "Time"), ("who", "Who"), ("action", "Action"),
+              ("resources", "Resource"), ("result", "Result"), ("ip", "Source IP")]
 
 
 def cmd_trail(args) -> int:
@@ -462,7 +467,7 @@ def cmd_trail(args) -> int:
             attr, value = "user", trail.my_session_name(ctx)
         regions = args.region or ([ctx.default_region] if not args.all_regions else ctx.enabled_regions())
         events, warnings = trail.lookup(profile, regions, start, end, attr, value, args.errors,
-                                        args.writes, args.limit)
+                                        args.writes, args.limit, security_only=args.security)
     except AuthError as exc:
         err(str(exc))
         return 1
@@ -470,8 +475,11 @@ def cmd_trail(args) -> int:
         print(json.dumps([e.raw for e in events], indent=2, default=str))
         return 0
     if events:
-        print(table_text([e.row() for e in events], TRAIL_COLS, max_width=48,
-                         colorize=lambda k, v: "red" if k == "result" and v != "OK" else None))
+        def colorize(k, v):
+            if k == "result" and v != "OK":
+                return "red"
+            return sev_colorizer("severity", v) if k == "flag" else None
+        print(table_text([e.row() for e in events], TRAIL_COLS, max_width=48, colorize=colorize))
     print(color(f"\n{len(events)} event(s). Event history can lag about 5 minutes behind.", "bold"))
     if not args.region and not args.all_regions:
         print(color(trail.GLOBAL_HINT, "dim"))
@@ -481,7 +489,14 @@ def cmd_trail(args) -> int:
             why = trail.explain_denied(e)
             if why:
                 print(color(f"{e.action} at {e.row()['time']}", "bold"))
-                print("  " + why.replace("\n", "\n  "))
+                print("  " + terminal_safe(why).replace("\n", "\n  "))
+    if args.security and events:
+        print()
+        seen = set()
+        for e in events:
+            if e.alert and e.alert[1] not in seen:
+                seen.add(e.alert[1])
+                print(color(f"{e.alert[1]}: ", "bold") + e.alert[2])
     for w in warnings:
         print(color("Note: " + w, "yellow"), file=sys.stderr)
     return 0
@@ -664,18 +679,20 @@ def desktop_entries(exe: str) -> dict:
     main = (
         "[Desktop Entry]\nType=Application\n"
         f"Name={APP_NAME}\nGenericName=AWS and Terraform tools\n"
-        "Comment=Redact output and screenshots, lab sweep, exposure audit, CloudTrail, plan and "
-        "policy checks, cloud maps\n"
+        "Comment=Redact output and screenshots, secrets scan, lab sweep, exposure and credential "
+        "audits, CloudTrail, least privilege, plan, drift, policy and SCP checks, cloud maps\n"
         f"Exec=\"{exe}\" gui\nIcon=network-server\nTerminal=false\n"
         "Categories=Development;Utility;\n"
-        "Keywords=aws;terraform;iam;cloudtrail;security;cost;redact;\n"
+        "Keywords=aws;terraform;iam;cloudtrail;security;cost;redact;secrets;scp;drift;\n"
         f"StartupNotify=true\nStartupWMClass={APP_ID}\n"
-        "Actions=image;sweep;audit;trail;plan;policy;map;\n"
+        "Actions=image;secrets;sweep;audit;creds;trail;leastpriv;plan;drift;policy;scp;map;\n"
     )
-    for page, title in (("image", "Image Redact"), ("sweep", "Lab Sweep"),
-                        ("audit", "Exposure Audit"),
-                        ("trail", "CloudTrail"), ("plan", "Plan Check"),
-                        ("policy", "Policy Check"), ("map", "Cloud Map")):
+    for page, title in (("image", "Image Redact"), ("secrets", "Secrets Scan"),
+                        ("sweep", "Lab Sweep"), ("audit", "Exposure Audit"),
+                        ("creds", "Credentials"), ("trail", "CloudTrail"),
+                        ("leastpriv", "Least Privilege"), ("plan", "Plan Check"),
+                        ("drift", "Drift"), ("policy", "Policy Check"), ("scp", "Org & SCPs"),
+                        ("map", "Cloud Map")):
         main += f"\n[Desktop Action {page}]\nName={title}\nExec=\"{exe}\" gui {page}\n"
     picker = (
         "[Desktop Entry]\nType=Application\nName=AWS Profile Picker\n"
@@ -1006,6 +1023,9 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument("--mine", action="store_true", help="Only events from your own session")
     t.add_argument("-e", "--errors", action="store_true", help="Only failed calls, like AccessDenied")
     t.add_argument("-w", "--writes", action="store_true", help="Hide read-only calls")
+    t.add_argument("-s", "--security", action="store_true",
+                   help="Only security events worth a look: root use, sign-ins without MFA, "
+                        "CloudTrail, IAM, KMS, Organizations and network changes, denied calls")
     t.add_argument("-n", "--limit", type=int, default=200, help="Most events to show (default 200)")
     t.add_argument("--json", action="store_true", help="Print the raw events as JSON")
     t.set_defaults(func=cmd_trail)
@@ -1062,6 +1082,10 @@ def build_parser() -> argparse.ArgumentParser:
     i.set_defaults(func=cmd_install)
     u = sub.add_parser("uninstall", help="Remove awskit")
     u.set_defaults(func=cmd_uninstall)
+
+    import importlib
+    for name in CLI_MODULES:
+        importlib.import_module(f"awskit.{name}").register_cli(sub, add_profiles)
     return p
 
 

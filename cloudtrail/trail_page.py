@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from gi.repository import Gtk
 
 from . import profiles, trail
-from .common import AwsContext, error_text
+from .common import SEVERITY_ORDER, AwsContext, error_text
 from .widgets import (CheckListButton, DetailPane, Page, ResultTable, all_regions, button,
                       label, on_main, run_bg, show_message, spacer, string_dropdown)
 
@@ -16,6 +16,7 @@ class TrailPage(Page):
     title = "CloudTrail"
 
     COLS = [
+        ("flag", "Flag", {"width": 90, "kind": "severity", "sort_key": "_flag_rank"}),
         ("time", "Time", {"width": 150}),
         ("who", "Who", {"width": 200}),
         ("action", "Action", {"width": 230}),
@@ -58,6 +59,12 @@ class TrailPage(Page):
         self.writes = Gtk.CheckButton(label="Hide reads")
         self.writes.set_tooltip_text("Hide Describe, List and Get calls")
         row2.append(self.writes)
+        self.security = Gtk.CheckButton(label="Security events")
+        self.security.set_tooltip_text(
+            "Only calls worth a second look: root use, sign-ins without MFA, CloudTrail, Config, "
+            "KMS, IAM, Organizations, security group and network changes, denied calls "
+            "(the CIS benchmark's list, plus a few more)")
+        row2.append(self.security)
         self.search_btn = button("Search", self.search, css="suggested-action")
         row2.append(self.search_btn)
         row2.append(spacer())
@@ -122,23 +129,32 @@ class TrailPage(Page):
         regions = self.regions.selected() or ["us-east-1"]
         profile = self.win.profile
         errors, writes = self.errors.get_active(), self.writes.get_active()
+        security = self.security.get_active()
         cancel = self.new_cancel()
         self.search_btn.set_sensitive(False)
         self.status.busy("Reading event history...", cancel)
         progress = on_main(self.status.progress)
         run_bg(lambda: trail.lookup(profile, regions, start, end, key, value, errors, writes,
-                                    limit=1000, progress=progress, cancel=cancel),
+                                    limit=1000, progress=progress, cancel=cancel,
+                                    security_only=security),
                self.done, self.failed)
 
     def done(self, result):
         self.events, warnings = result
         self.search_btn.set_sensitive(True)
-        self.table.set_rows([e.row() for e in self.events], self.events)
+        rows = []
+        for e in self.events:
+            row = e.row()
+            row["_flag_rank"] = SEVERITY_ORDER.get(row["flag"], 9) if row["flag"] else 99
+            rows.append(row)
+        self.table.set_rows(rows, self.events)
         if not self.events:
             self.table.clear("No events matched. Event history can lag about 5 minutes, and "
                              "global services like IAM log to us-east-1.")
         failed = sum(1 for e in self.events if e.error)
-        self.status.idle(f"{len(self.events)} event(s), {failed} failed.")
+        flagged = sum(1 for e in self.events if e.alert)
+        self.status.idle(f"{len(self.events)} event(s), {failed} failed, "
+                         f"{flagged} worth a look.")
         if warnings:
             self.detail.set_text("Notes:\n\n" + "\n".join(warnings))
 

@@ -1,5 +1,5 @@
 <#
-Installs AWS Kit, with all nine tools and the same windows as on Linux, for the current
+Installs AWS Kit, with all fourteen tools and the same windows as on Linux, for the current
 Windows user. No admin rights needed.
 
 Double-click install-windows.cmd in the Cloud-Tools folder, or run:
@@ -50,8 +50,9 @@ $GtkSha256 = '1f95a92d037f5292da05e6ab1037032ff21ddb7b20d4ac8e83e3674c864c07b0'
 $ProgId = 'AWSKit.ImageRedact'
 $UninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AWSKit'
 $MenuDir = Join-Path ([Environment]::GetFolderPath('Programs')) 'AWS Kit'
-$Tools = @('awskit', 'pii-redact', 'image-redact', 'lab-sweep', 'exposure-audit', 'cloudtrail',
-           'plan-check', 'policy-check', 'profiles', 'cloud-map')
+$Tools = @('awskit', 'pii-redact', 'image-redact', 'secrets-scan', 'lab-sweep', 'exposure-audit',
+           'credentials', 'cloudtrail', 'least-privilege', 'plan-check', 'drift', 'policy-check',
+           'org-scps', 'profiles', 'cloud-map')
 
 function Step($text) { Write-Host ''; Write-Host "== $text" -ForegroundColor Cyan }
 function Note($text) { Write-Host "   $text" }
@@ -434,7 +435,7 @@ function New-Shortcut($path, $arguments, $icon, $description) {
     $lnk.Save()
 }
 New-Item -ItemType Directory -Force -Path $MenuDir | Out-Null
-New-Shortcut (Join-Path $MenuDir 'AWS Kit.lnk') '' 'awskit.ico' 'PII Redact, Image Redact, Lab Sweep, Exposure Audit, CloudTrail, Plan Check, Policy Check, Profiles and Cloud Map'
+New-Shortcut (Join-Path $MenuDir 'AWS Kit.lnk') '' 'awskit.ico' 'PII Redact, Image Redact, Secrets Scan, Lab Sweep, Exposure Audit, Credentials, CloudTrail, Least Privilege, Plan Check, Drift, Policy Check, Org and SCPs, Profiles and Cloud Map'
 New-Shortcut (Join-Path $MenuDir 'PII Redact.lnk') 'redact' 'awskit.ico' 'Paste output and get it back with account IDs, keys and personal info redacted'
 New-Shortcut (Join-Path $MenuDir 'Image Redact.lnk') 'image' 'image-redact.ico' 'Cover account IDs, keys and personal info in screenshots'
 New-Shortcut (Join-Path $MenuDir 'AWS Profile Picker.lnk') 'profile' 'awskit.ico' 'Switch the AWS profile your terminals use'

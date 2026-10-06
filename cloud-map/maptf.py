@@ -40,8 +40,9 @@ TYPE_KINDS = {
     "aws_vpc_security_group_ingress_rule": "detail", "aws_vpc_security_group_egress_rule": "detail",
     "aws_security_group_rule": "detail",
     "aws_network_acl": "nacl", "aws_default_network_acl": "detail",
-    "aws_network_acl_association": "detail",
+    "aws_network_acl_association": "detail", "aws_network_acl_rule": "detail",
     "aws_instance": "instance", "aws_lb": "lb", "aws_alb": "lb",
+    "aws_lb_listener": "detail", "aws_alb_listener": "detail",
     "aws_db_instance": "rds", "aws_db_subnet_group": "detail",
     "aws_vpn_gateway": "vgw", "aws_vpn_gateway_attachment": "detail",
     "aws_customer_gateway": "cgw", "aws_vpn_connection": "vpn",
@@ -514,8 +515,10 @@ class Builder:
              "aws_route", "aws_route_table_association", "aws_main_route_table_association",
              "aws_vpc_endpoint", "aws_security_group", "aws_default_security_group",
              "aws_vpc_security_group_ingress_rule", "aws_vpc_security_group_egress_rule",
-             "aws_security_group_rule", "aws_network_acl", "aws_db_subnet_group",
-             "aws_instance", "aws_lb", "aws_alb", "aws_db_instance", "aws_vpn_connection",
+             "aws_security_group_rule", "aws_network_acl", "aws_default_network_acl",
+             "aws_network_acl_rule", "aws_network_acl_association", "aws_db_subnet_group",
+             "aws_instance", "aws_lb", "aws_alb", "aws_lb_listener", "aws_alb_listener",
+             "aws_db_instance", "aws_vpn_connection",
              "aws_iam_openid_connect_provider", "aws_iam_saml_provider", "aws_iam_role",
              "aws_iam_role_policy_attachment", "aws_identitystore_user",
              "aws_identitystore_group", "aws_ssoadmin_permission_set",
@@ -527,6 +530,7 @@ class Builder:
         self.policies = {}
         self.scp_targets = {}
         self.subnet_groups = {}
+        self.default_acls = {}          # a VPC's default network ACL ID -> the VPC
         self.org = None
         self.principal_names = {}
         for d in self.data:
@@ -627,6 +631,9 @@ class Builder:
     def t_aws_vpc(self, r, default=False):
         mm.add_vpc(self.snap, r.node, r.account, r.region, [self.val(r, "cidr_block", "")],
                    self.name_tag(r), default, self.tags(r), "terraform")
+        acl = self.known(r, "default_network_acl_id")
+        if isinstance(acl, str):
+            self.default_acls[acl] = r.node
 
     def t_aws_default_vpc(self, r):
         self.t_aws_vpc(r, default=True)
@@ -778,7 +785,8 @@ class Builder:
                 groups.append(r.node)
             out.append(mm.rule(b.get("protocol"), b.get("from_port"), b.get("to_port"),
                                list(b.get("cidr_blocks") or []) + list(b.get("ipv6_cidr_blocks") or []),
-                               groups, b.get("description", "")))
+                               groups, b.get("description", ""),
+                               prefix_lists=list(b.get("prefix_list_ids") or [])))
         return out
 
     def t_aws_security_group(self, r):
@@ -796,9 +804,10 @@ class Builder:
         cidrs = [c for c in (self.known(r, "cidr_ipv4"), self.known(r, "cidr_ipv6")) if c]
         groups = [g for g in (self.ref(r, "referenced_security_group_id"),) if g]
         proto = self.known(r, "ip_protocol") or "-1"
+        lists = [p for p in (self.known(r, "prefix_list_id"),) if isinstance(p, str)]
         mm.add_sg_rule(self.snap, sg, direction, mm.rule(
             proto, self.known(r, "from_port"), self.known(r, "to_port"), cidrs, groups,
-            self.known(r, "description") or ""))
+            self.known(r, "description") or "", prefix_lists=lists))
 
     def t_aws_vpc_security_group_ingress_rule(self, r):
         self._vpc_rule(r, "ingress")
@@ -816,11 +825,92 @@ class Builder:
         cidrs = list(r.values.get("cidr_blocks") or []) + list(r.values.get("ipv6_cidr_blocks") or [])
         mm.add_sg_rule(self.snap, sg, self.val(r, "type", "ingress"), mm.rule(
             r.values.get("protocol"), r.values.get("from_port"), r.values.get("to_port"),
-            cidrs, groups, r.values.get("description", "")))
+            cidrs, groups, r.values.get("description", ""),
+            prefix_lists=list(r.values.get("prefix_list_ids") or [])))
+
+    def _acl_entries(self, r) -> list:
+        """Inline ingress and egress blocks, plus the catch-all deny AWS adds to every
+        network ACL (Terraform doesn't list it)."""
+        out = []
+        for attr, egress in (("ingress", False), ("egress", True)):
+            if attr in r.unknown:
+                continue
+            for b in r.values.get(attr) or []:
+                entry = self._acl_entry(b, egress, "action")
+                if entry is not None:
+                    out.append(entry)
+        return out + mm.default_nacl_entries()
+
+    @staticmethod
+    def _acl_entry(b, egress, action_key):
+        if not isinstance(b, dict):
+            return None
+        try:
+            return mm.nacl_entry(b.get("rule_no", b.get("rule_number")), egress,
+                                 b.get(action_key, "deny"), b.get("protocol", "-1"),
+                                 b.get("cidr_block", ""), b.get("ipv6_cidr_block", ""),
+                                 b.get("from_port"), b.get("to_port"), b.get("icmp_type"),
+                                 b.get("icmp_code"))
+        except (TypeError, ValueError):
+            return None                  # a rule number that isn't known yet
+
+    def _acl_unknown(self, node, r):
+        """A plan where the inline rules are known only after apply: say so, so
+        reachability doesn't take the ACL for one that only has the catch-all deny."""
+        if node is not None and ("ingress" in r.unknown or "egress" in r.unknown):
+            node.props["rules_unknown"] = True
 
     def t_aws_network_acl(self, r):
-        mm.add_nacl(self.snap, r.node, self.ref(r, "vpc_id"), self.refs(r, "subnet_ids"),
-                    False, self.name_tag(r), self.tags(r), "terraform")
+        node = mm.add_nacl(self.snap, r.node, self.ref(r, "vpc_id"), self.refs(r, "subnet_ids"),
+                           False, self.name_tag(r), self.tags(r), "terraform",
+                           entries=self._acl_entries(r))
+        self._acl_unknown(node, r)
+
+    def t_aws_default_network_acl(self, r):
+        """Adopts the VPC's default ACL and replaces its rules with the ones given. It
+        covers every subnet not associated with another ACL."""
+        vpc = self.known(r, "vpc_id") or ""
+        if not vpc:
+            got = self._from_config(r, "default_network_acl_id")
+            vpc = next((n for n in got if self.snap.get(n) is not None
+                        and self.snap.get(n).kind == "vpc"), "")
+        node = mm.add_nacl(self.snap, r.node, vpc, self.refs(r, "subnet_ids"), True,
+                           self.name_tag(r), self.tags(r), "terraform",
+                           entries=self._acl_entries(r))
+        self._acl_unknown(node, r)
+
+    def t_aws_network_acl_rule(self, r):
+        acl = self.ref(r, "network_acl_id")
+        if not acl:
+            return
+        node = self.snap.get(acl)
+        vpc = acl if node is not None and node.kind == "vpc" else self.default_acls.get(acl, "")
+        if vpc and (node is None or node.kind == "vpc"):
+            # A rule added to a VPC's default ACL that this input doesn't manage itself:
+            # the ACL starts with AWS's defaults, allow everything (100, and 101 for IPv6).
+            ids = [a for a, v in self.default_acls.items() if v == vpc]
+            acl = ids[0] if ids else f"{vpc}/default-network-acl"
+            if self.snap.get(acl) is None:
+                start = [mm.nacl_entry(100, eg, "allow", "-1", "0.0.0.0/0") for eg in (False, True)]
+                start += [mm.nacl_entry(101, eg, "allow", "-1", "", "::/0") for eg in (False, True)]
+                mm.add_nacl(self.snap, acl, vpc, (), True, source="terraform",
+                            entries=start + mm.default_nacl_entries())
+        entry = self._acl_entry(dict(r.values, rule_no=r.values.get("rule_number")),
+                                bool(r.values.get("egress")), "rule_action")
+        if entry is not None:
+            mm.add_nacl_entry(self.snap, acl, entry)
+
+    def t_aws_network_acl_association(self, r):
+        acl, subnet = self.ref(r, "network_acl_id"), self.ref(r, "subnet_id")
+        node = self.snap.get(acl)
+        if node is None or node.kind != "nacl" or not subnet:
+            return                  # like a VPC's default ACL in a plan, found as the VPC
+        node.props["subnets"] = sorted(set(node.props.get("subnets", [])) | {subnet})
+        # A subnet is in one ACL at a time: it leaves the default one.
+        for other in self.snap.of_kind("nacl"):
+            if other.id != acl and subnet in other.props.get("subnets", []) and \
+                    other.props.get("default"):
+                other.props["subnets"] = [s for s in other.props["subnets"] if s != subnet]
 
     def t_aws_db_subnet_group(self, r):
         name = self.known(r, "name") or r.name
@@ -839,7 +929,12 @@ class Builder:
                         self.val(r, "private_ip", ""), public,
                         self.refs(r, "vpc_security_group_ids"), meta.get("http_tokens", ""),
                         meta.get("http_endpoint", ""),
-                        self.known(r, "iam_instance_profile") or "", self.tags(r), "terraform")
+                        self.known(r, "iam_instance_profile") or "", self.tags(r), "terraform",
+                        **self._ipv6(r))
+
+    def _ipv6(self, r) -> dict:
+        ips = [x for x in (self.known(r, "ipv6_addresses") or []) if isinstance(x, str) and x]
+        return {"ipv6_ips": sorted(set(ips))} if ips else {}
 
     def t_aws_lb(self, r):
         subnets = self.refs(r, "subnets")
@@ -849,9 +944,19 @@ class Builder:
         internal = r.values.get("internal")
         mm.add_lb(self.snap, r.node, self.val(r, "name", r.name), vpc, subnets, azs,
                   "internal" if internal else "internet-facing",
-                  self.known(r, "load_balancer_type") or "application", self.tags(r), "terraform")
+                  self.known(r, "load_balancer_type") or "application", self.tags(r), "terraform",
+                  security_groups=self.refs(r, "security_groups"))
 
     t_aws_alb = t_aws_lb
+
+    def t_aws_lb_listener(self, r):
+        lb = self.ref(r, "load_balancer_arn")
+        node = self.snap.get(lb)
+        if node is None or node.kind != "lb":
+            return
+        mm.add_listener(self.snap, lb, self.known(r, "port"), self.known(r, "protocol") or "")
+
+    t_aws_alb_listener = t_aws_lb_listener
 
     def t_aws_db_instance(self, r):
         group = self.ref(r, "db_subnet_group_name")
@@ -860,7 +965,9 @@ class Builder:
         mm.add_rds(self.snap, r.node, self.val(r, "identifier", r.name), vpc, subnets,
                    self.known(r, "availability_zone") or "", self.val(r, "engine", ""),
                    self.known(r, "engine_version") or "", self.val(r, "instance_class", ""),
-                   bool(r.values.get("publicly_accessible")), self.tags(r), "terraform")
+                   bool(r.values.get("publicly_accessible")), self.tags(r), "terraform",
+                   security_groups=self.refs(r, "vpc_security_group_ids"),
+                   port=self.known(r, "port"))
 
     def t_aws_vpn_connection(self, r):
         cgw = self.ref(r, "customer_gateway_id")

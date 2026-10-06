@@ -1,6 +1,6 @@
 # Windows installer
 
-Installs [AWS Kit](../awskit/), with all nine tools and the same window as on Linux, for your Windows user, without admin rights.
+Installs [AWS Kit](../awskit/), with all fourteen tools and the same window as on Linux, for your Windows user, without admin rights.
 
 To install, double-click `install-windows.cmd` in the root of the repo. It runs `install.ps1` from this folder.
 

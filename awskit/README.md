@@ -1,6 +1,6 @@
 # AWS Kit
 
-The app that holds all nine tools in this repo. It gives them one window with a sidebar, one `awskit` command, one installer, and shared code for AWS sessions, tables, exporting, the clipboard and redaction.
+The app that holds all fourteen tools in this repo. It gives them one window with a sidebar, one `awskit` command, one installer, and shared code for AWS sessions, tables, exporting, the clipboard and redaction.
 
 ![The AWS Kit window on the PII Redact page](../pii-redact/docs/screenshot.png)
 
@@ -8,11 +8,16 @@ The app that holds all nine tools in this repo. It gives them one window with a 
 |---|---|---|---|
 | PII Redact | PII Redact | `pii-redact` or `awskit redact` | [pii-redact/](../pii-redact/) |
 | Image Redact | Image Redact | `awskit image` | [image-redact/](../image-redact/) |
+| Secrets Scan | Secrets Scan | `awskit secrets` | [secrets-scan/](../secrets-scan/) |
 | Lab Sweep | Lab Sweep | `awskit sweep` | [lab-sweep/](../lab-sweep/) |
 | Exposure Audit | Exposure Audit | `awskit audit` | [exposure-audit/](../exposure-audit/) |
+| Credentials | Credentials | `awskit creds` | [credentials/](../credentials/) |
 | CloudTrail | CloudTrail | `awskit trail` | [cloudtrail/](../cloudtrail/) |
+| Least Privilege | Least Privilege | `awskit least-priv` | [least-privilege/](../least-privilege/) |
 | Plan Check | Plan Check | `awskit plan` | [plan-check/](../plan-check/) |
+| Drift | Drift | `awskit drift` | [drift/](../drift/) |
 | Policy Check | Policy Check | `awskit policy` | [policy-check/](../policy-check/) |
+| Org & SCPs | Org & SCPs | `awskit scp` | [org-scps/](../org-scps/) |
 | Profiles | Profiles | `awskit profile` or `awsp` | [profiles/](../profiles/) |
 | Cloud Map | Cloud Map | `awskit map` | [cloud-map/](../cloud-map/) |
 
@@ -43,7 +48,7 @@ On Windows, see [Windows](#windows) below. On WSL, see [WSL](../README.md#wsl) i
 
 The installer:
 
-- copies `awskit/` and the nine tool folders to `~/.local/share/awskit/`
+- copies `awskit/` and the fourteen tool folders to `~/.local/share/awskit/`
 - writes two small launchers: `~/.local/bin/awskit`, and `~/.local/bin/pii-redact`, which is the same as `awskit redact`
 - adds five launcher entries: **AWS Kit** (right-click opens a tool directly), **AWS Profile Picker**, **PII Redact** (right-click has Redact clipboard and Settings), **PII Redact Settings**, and **Image Redact** (right-click has Open clipboard image and Redact clipboard image), which also shows up under Open With for images
 - removes launcher entries left over from the standalone pii-redact, if you had it
@@ -57,7 +62,7 @@ To try it without installing, run `python3 -m awskit` from the root of the repo.
 
 ## The window
 
-Run `awskit` with no arguments, or open **AWS Kit** from your launcher. It opens on PII Redact, the tool you'll probably use most. `awskit gui audit` opens it on a certain page (redact, image, sweep, audit, trail, plan, policy, profiles or map). If the window is already open, it switches to that page instead of opening a second window.
+Run `awskit` with no arguments, or open **AWS Kit** from your launcher. It opens on PII Redact, the tool you'll probably use most. `awskit gui audit` opens it on a certain page (redact, image, secrets, sweep, audit, creds, trail, leastpriv, plan, drift, policy, scp, profiles or map). If the window is already open, it switches to that page instead of opening a second window.
 
 Things that work the same on every page:
 
@@ -68,7 +73,7 @@ Things that work the same on every page:
 - **Status bar** at the bottom. It shows progress while a scan runs, and **Stop** cancels it after the calls already running finish.
 - **Export** saves the table as Markdown, CSV or JSON. The file name you pick decides the format.
 
-Keyboard: Ctrl+1 to Ctrl+9 switch pages, and Ctrl+Q quits. On the PII Redact page, Ctrl+Shift+C copies and Ctrl+, opens its settings. Image Redact has its own shortcuts, see [image-redact/](../image-redact/#the-editor), and so does the Cloud Map page, see [cloud-map/](../cloud-map/README.md#the-cloud-map-page).
+Keyboard: Ctrl+1 to Ctrl+9 open the first nine pages, Ctrl+Page Up and Ctrl+Page Down go through all of them, and Ctrl+Q quits. On the PII Redact page, Ctrl+Shift+C copies and Ctrl+, opens its settings. Image Redact has its own shortcuts, see [image-redact/](../image-redact/#the-editor), and so does the Cloud Map page, see [cloud-map/](../cloud-map/README.md#the-cloud-map-page).
 
 All AWS calls run in the background, so the window stays usable during a scan.
 
@@ -217,13 +222,18 @@ On GNOME Wayland, clip mode depends on wl-clipboard, which GNOME doesn't fully s
 | `awskit gui [PAGE]` | Open the window on a page |
 | `pii-redact`, `awskit redact` | PII Redact, see [pii-redact/](../pii-redact/) |
 | `awskit image` | Image Redact, see [image-redact/](../image-redact/) |
+| `awskit secrets` | Secrets Scan, and `--install-hook` for the commit hook, see [secrets-scan/](../secrets-scan/) |
 | `awskit sweep` | Lab Sweep, see [lab-sweep/](../lab-sweep/) |
 | `awskit audit` | Exposure Audit, see [exposure-audit/](../exposure-audit/) |
-| `awskit trail` | CloudTrail lookups, see [cloudtrail/](../cloudtrail/) |
+| `awskit creds` | Credentials, see [credentials/](../credentials/) |
+| `awskit trail` | CloudTrail lookups, `--security` for security events, see [cloudtrail/](../cloudtrail/) |
+| `awskit least-priv` | Least Privilege, see [least-privilege/](../least-privilege/) |
 | `awskit plan` | Plan Check, see [plan-check/](../plan-check/) |
+| `awskit drift` | Drift, see [drift/](../drift/) |
 | `awskit policy` | Policy Check, see [policy-check/](../policy-check/) |
+| `awskit scp` | Org & SCPs: `tree`, `show`, `test` and `save`, see [org-scps/](../org-scps/) |
 | `awskit profile` | Profile picker, see [profiles/](../profiles/) |
-| `awskit map` | Cloud Map: `scan`, `tf`, `export` (to `.drawio`, SVG or PNG), `edit` in the offline draw.io, `remember` and `layout` for the saved layout, and `design` for the designer (`new`, `edit`, `check`, `build`), see [cloud-map/](../cloud-map/) |
+| `awskit map` | Cloud Map: `scan`, `tf`, `export` (to `.drawio`, SVG or PNG), `edit` in the offline draw.io, `remember` and `layout` for the saved layout, and `design` for the designer (`new`, `edit`, `check`, `build`), and `reach` for reachability, see [cloud-map/](../cloud-map/) |
 | `awskit shell-init bash` | Print the shell hook for `awsp` (bash, zsh, fish or powershell) |
 | `awskit install` | Install to `~/.local` (what `install.sh` runs). `--drawio-zip PATH` and `--no-drawio` as above |
 | `awskit uninstall` | Remove it |
@@ -233,8 +243,8 @@ Every command has `--help`. Options that most AWS commands share:
 
 | Option | What it does |
 |---|---|
-| `-p NAME`, `--profile NAME` | Use this AWS profile. Repeat it to cover several accounts in one run (sweep and audit). |
-| `--all-profiles` | Use every profile in `~/.aws/config` (sweep and audit) |
+| `-p NAME`, `--profile NAME` | Use this AWS profile. Repeat it to cover several accounts in one run (sweep, audit, creds and drift). |
+| `--all-profiles` | Use every profile in `~/.aws/config` (sweep, audit, creds and drift) |
 | `-r REGION`, `--region REGION` | Only this region. Repeatable. |
 | `--json` | Print JSON instead of a table |
 
@@ -244,7 +254,7 @@ Without `-p`, AWS commands use the profile picked in AWS Kit, then `AWS_PROFILE`
 
 Colors are turned off when the output isn't a terminal or when `NO_COLOR` is set.
 
-Exit codes: `0` for success, `1` for an error, `2` when `--fail-on` finds something at or above the level you gave it. That makes `audit`, `plan` and `policy` easy to use in CI. `pii-redact run` keeps the exit code of the command it ran.
+Exit codes: `0` for success, `1` for an error, `2` when `--fail-on` finds something at or above the level you gave it. That makes `audit`, `creds`, `plan` and `policy` easy to use in CI. `pii-redact run` keeps the exit code of the command it ran. A few commands answer a yes or no question, so they have their own: `awskit secrets` exits `1` when something should stop a commit (and `2` when it couldn't scan), `awskit drift --fail-on-drift` exits `2` when it finds drift, and `awskit scp test` and `awskit map reach` exit `0` for allowed or reachable, `3` for blocked and `4` for "depends" or unknown.
 
 ## Credentials
 
@@ -254,7 +264,7 @@ It never stores credentials. For each scan, it reads the profile's credentials o
 
 When an SSO sign-in has expired, you get a plain message with the command to fix it, like `Sign-in for profile lab-admin has expired. Run: aws sso login --profile lab-admin`. On the Profiles page, **Sign in** does that for you.
 
-AWS Kit only talks to AWS APIs. PII Redact and Image Redact don't talk to anything. There's no telemetry and nothing else leaves your machine.
+AWS Kit only talks to AWS APIs. PII Redact, Image Redact and Secrets Scan don't talk to anything. There's no telemetry and nothing else leaves your machine.
 
 ## Permissions
 
@@ -262,14 +272,19 @@ AWS Kit only talks to AWS APIs. PII Redact and Image Redact don't talk to anythi
 |---|---|
 | PII Redact | Nothing. It never calls AWS. |
 | Image Redact | Nothing. It never calls AWS. |
+| Secrets Scan | Nothing. It never calls AWS, it only runs `git` in the repo you pick. |
 | Lab Sweep scan | Read access. `SecurityAudit` covers almost all of it, plus `ce:GetCostAndUsage` for the spend button. |
 | Lab Sweep teardown | Delete permissions for whatever you tick. In a lab account that's usually an admin role. |
 | Exposure Audit | `SecurityAudit` |
+| Credentials | `SecurityAudit` covers it: the credential report, account summary and authorization details, and the access key, SSH key and service credential lists |
 | CloudTrail | `cloudtrail:LookupEvents` |
+| Least Privilege | `cloudtrail:LookupEvents`, reading the role's policies, and IAM's last accessed data (`iam:GenerateServiceLastAccessedDetails`, `iam:GetServiceLastAccessedDetails`) |
 | Plan Check | Nothing in AWS. Running a plan needs whatever your Terraform needs. |
+| Drift | Read access to the types it compares. `ReadOnlyAccess` covers it. The exact check needs whatever your Terraform needs. |
 | Policy Check | Nothing offline. `access-analyzer:ValidatePolicy` for Also ask AWS, and `iam:GetPolicy`, `iam:GetPolicyVersion` and `iam:GetRole` for Load from AWS. |
+| Org & SCPs | `organizations:Describe*` and `organizations:List*`, from the management account or a delegated admin. Terraform and snapshots need nothing in AWS. |
 | Profiles | `sts:GetCallerIdentity` for Check all |
-| Cloud Map | `SecurityAudit`, plus `budgets:ViewBudget` and `ce:GetAnomalyMonitors` for the cost box. Organizations and Identity Center need the management account or a delegated admin. Terraform maps need nothing in AWS. |
+| Cloud Map | `SecurityAudit`, plus `budgets:ViewBudget` and `ce:GetAnomalyMonitors` for the cost box. Organizations and Identity Center need the management account or a delegated admin. Terraform maps and reachability need nothing in AWS. |
 
 Each tool's README lists the exact actions. When a role can't read something, scans keep going and list what they couldn't check at the end instead of failing.
 
@@ -279,7 +294,7 @@ Everything lives in `~/.config/awskit/`:
 
 | File | What's in it |
 |---|---|
-| `config.json` | Lab Sweep, Exposure Audit and Cloud Map settings, below. Lab Sweep's **Settings** button edits it. |
+| `config.json` | Lab Sweep, Exposure Audit, Cloud Map, Secrets Scan and Drift settings, below. Lab Sweep's **Settings** button edits it. |
 | `redact.json` | PII Redact's settings. Its **Settings** window edits it. Image Redact uses them too. See [pii-redact/](../pii-redact/). |
 | `image.json` | Image Redact's colors, widths and recent folders. The editor saves it as you go. See [image-redact/](../image-redact/). |
 | `current-profile` | The profile picked in Profiles. See [profiles/](../profiles/). |
@@ -297,10 +312,14 @@ Everything lives in `~/.config/awskit/`:
 | `sns_topic` | `""` | SNS topic ARN for daily check summaries |
 | `known_accounts` | `[]` | Account IDs Cloud Map treats as yours when it can't read the org, so a role trusted by one of them isn't flagged |
 | `cloud_map` | `{}` | What the Cloud Map page showed last. The page keeps it up to date. |
+| `secrets_scan` | `{}` | Secrets Scan's last folder and scan mode, and whether account IDs stop a commit. The page keeps it up to date. |
+| `drift` | `{}` | Drift's ignore list: IDs, Terraform addresses or `tag:KEY` for resources to leave out. The page's ignore button edits it. |
+
+Keys that a newer version of AWS Kit added are kept as they are when an older one saves the file.
 
 ## Windows
 
-AWS Kit runs on Windows 10 and 11 the same way it does on Linux: the same window, all nine tools, and the same commands. It's the same code, running on GTK 4 for Windows.
+AWS Kit runs on Windows 10 and 11 the same way it does on Linux: the same window, all fourteen tools, and the same commands. It's the same code, running on GTK 4 for Windows.
 
 ### Install
 
@@ -395,7 +414,7 @@ pii-redact/                one folder per tool
 └── examples/              something to try it on
 ```
 
-Every tool folder follows the same pattern: one file with the logic, which has no GTK in it and is what the commands use, and one `_page.py` file for the window. Cloud Map splits its logic over several files (model, scan, Terraform, layout, themes, draw.io writer, renderer, icons, the editor's local server, layout memory and the designer), with `map_page.py` for its page and `map_edit.py` for editing on it. Image Redact has two more: `imageedit.py`, the editor without a window, and `image_tk.py`, a simpler tkinter window it falls back to when GTK isn't set up. Both windows drive `imageedit.py`, so they behave the same. On Windows the GTK window is used, same as on Linux.
+Every tool folder follows the same pattern: one file with the logic, which has no GTK in it and is what the commands use, and one `_page.py` file for the window. Org & SCPs adds `policyeval.py`, a policy evaluator with no GTK that its checks are built on. Cloud Map splits its logic over several files (model, scan, Terraform, layout, themes, draw.io writer, renderer, icons, the editor's local server, layout memory and the designer), with `map_page.py` for its page and `map_edit.py` for editing on it. Image Redact has two more: `imageedit.py`, the editor without a window, and `image_tk.py`, a simpler tkinter window it falls back to when GTK isn't set up. Both windows drive `imageedit.py`, so they behave the same. On Windows the GTK window is used, same as on Linux.
 
 The tool folders sit next to `awskit/` instead of inside it so that each tool is easy to find on its own. To make that work, `awskit/__init__.py` adds them to the package's search path, so `pii-redact/redact.py` loads as `awskit.redact` and can use `common.py` and `widgets.py` like any file inside the package. The installer copies the folders the same way, side by side, into `~/.local/share/awskit/`.
 
@@ -408,7 +427,7 @@ pip install --user moto
 python3 -m unittest discover -s tests -v
 ```
 
-They cover PII Redact against its sample file and its settings, Image Redact's box placement, OCR cleanup, saving, renaming and moving (plus reading a real rendered screenshot when tesseract is installed), the scan and teardown logic against fake EC2, EBS, KMS, Secrets Manager and S3 resources, the audit checks, the plan and policy rules against the files in each tool's `examples/` folder, profile parsing, and Cloud Map: its Terraform input, model, layout and draw.io output against its example states (stable IDs, byte-identical output, real draw.io shape names, flags, layers and redaction), its live scan against fake Organizations, IAM, EC2 and CloudTrail, including the AccessDenied path, the renderer behind its page and its SVG and PNG export (stable sizes, hit testing at several zoom levels, redacted SVGs, the icon reader and the draw.io download check), its designer (each check against a broken example, the generated files against a saved copy, the folder rules, and a plan of the output read back into the same map), and its editor: layout memory round trips (moved boxes, captions, colors and notes surviving a rescan with a resource added and one removed, redacted files, and a file saved by the real draw.io), the local server over HTTP (tokens, paths it refuses, saving, shutting down), `awskit map edit`, and finding Edge and the fallback order with Windows mocked.
+They cover PII Redact against its sample file and its settings, Image Redact's box placement, OCR cleanup, saving, renaming and moving (plus reading a real rendered screenshot when tesseract is installed), the scan and teardown logic against fake EC2, EBS, KMS, Secrets Manager and S3 resources, the audit checks, the plan and policy rules against the files in each tool's `examples/` folder, profile parsing, and Cloud Map: its Terraform input, model, layout and draw.io output against its example states (stable IDs, byte-identical output, real draw.io shape names, flags, layers and redaction), its live scan against fake Organizations, IAM, EC2 and CloudTrail, including the AccessDenied path, the renderer behind its page and its SVG and PNG export (stable sizes, hit testing at several zoom levels, redacted SVGs, the icon reader and the draw.io download check), its designer (each check against a broken example, the generated files against a saved copy, the folder rules, and a plan of the output read back into the same map), and its editor: layout memory round trips (moved boxes, captions, colors and notes surviving a rescan with a resource added and one removed, redacted files, and a file saved by the real draw.io), the local server over HTTP (tokens, paths it refuses, saving, shutting down), `awskit map edit`, and finding Edge and the fallback order with Windows mocked, plus reachability through security groups, network ACLs, routes, peering, NAT and internet gateways, and its panel on the page. The newer tools each have their own test file: Secrets Scan against throwaway git repos (including hostile repo settings that must not run anything), Credentials against fake IAM and hand-made credential reports, Least Privilege against hand-made CloudTrail events and trail files, Drift against fake AWS and hand-made Terraform states (with fake secrets that must never show up), Org & SCPs against fake Organizations and every condition operator, and CloudTrail's security events against recorded events.
 
 `AWSKIT_TF_TEST=1` adds a test that runs terraform or tofu on the designer's output (fmt, init, validate and an offline plan). It needs the AWS provider, from the registry or a mirror in `TF_CLI_CONFIG_FILE`. `AWSKIT_EDITOR_TEST=1` adds one more that opens the real draw.io editor in WebKitGTK, with networking blocked when `unshare` can, and checks it loads and saves without reaching anything outside the machine. It needs WebKitGTK 6.0, draw.io downloaded, and a display or `xvfb-run`.
 
