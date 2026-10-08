@@ -115,7 +115,9 @@ F2 jumps to the name box with the name selected, and Ctrl+M opens the folder but
 
 ### Viewing
 
-The image fits the window when it opens. Ctrl+scroll zooms around the pointer, Ctrl++ and Ctrl+- zoom in and out, Ctrl+0 fits it again, and clicking the zoom percentage goes to actual size. Drag with the middle mouse button to move around.
+The image fits the window when it opens. The mouse wheel zooms around the pointer (Ctrl+wheel does the same), Ctrl++ and Ctrl+- zoom in and out, Ctrl+0 fits it again, and clicking the zoom percentage goes to actual size. To move around a zoomed image, drag with the middle mouse button, use Shift+wheel to scroll up and down, or the scrollbars. On a touchpad, two-finger scrolling moves around, and pinching or Ctrl with two-finger scrolling zooms. That's on Linux: GTK on Windows and in WSL reports a touchpad as a mouse wheel, so there two-finger scrolling zooms too, and Shift with two-finger scrolling or a middle-drag moves around. In Cloud Map, Shift with the wheel moves sideways instead, since dragging already moves the map.
+
+In the tkinter window (the fallback on Windows when GTK isn't set up), the wheel zooms too, Shift+wheel scrolls up and down, and Ctrl+Shift+wheel scrolls sideways.
 
 ### Unsaved changes
 

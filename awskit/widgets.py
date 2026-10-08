@@ -45,6 +45,22 @@ def install_css():
                                               Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
 
+def scroll_kind(controller) -> str:
+    """What sent a scroll event: "touchpad" (two-finger scrolling, which should move the
+    view), "wheel" (notches, dy is 1 per notch) or "fine" (a wheel that reports distances,
+    like a high resolution wheel on an older compositor)."""
+    dev = controller.get_current_event_device()
+    source = dev.get_source() if dev is not None else None
+    if source in (Gdk.InputSource.TOUCHPAD, Gdk.InputSource.TRACKPOINT,
+                  Gdk.InputSource.TOUCHSCREEN):
+        return "touchpad"
+    try:
+        surface = controller.get_unit() == Gdk.ScrollUnit.SURFACE
+    except AttributeError:  # GTK before 4.8 sends notches and touchpad scrolls only
+        surface = False
+    return "fine" if surface else "wheel"
+
+
 # =================================================================== threads
 
 def run_bg(work, on_done, on_error=None):

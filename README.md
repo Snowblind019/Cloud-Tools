@@ -6,7 +6,7 @@ These are small tools I made for my own AWS and Terraform work on Fedora. Each o
 
 They all live in one Linux app called **AWS Kit**: one GTK 4 window with a sidebar of all fourteen tools, plus commands for everything in the terminal.
 
-https://github.com/user-attachments/assets/6fdbbe01-4e66-41c5-bc79-f4d612ec5bc5
+![AWS Kit open on the PII Redact page](pii-redact/docs/screenshot.png)
 
 ## How I built these
 
@@ -102,6 +102,7 @@ AWS Kit also runs on WSL2 with WSLg. Install the same packages inside the distro
 | `awskit map design build lab.drawio` | Turn a network drawn with the designer into Terraform, in `lab-tf/` |
 | `awskit map reach lab.cloudmap.json internet bastion --port 22` | Can the internet reach the bastion on SSH, and if not, what blocks it |
 | `awsp` | Pick the AWS profile for your terminals |
+| `awskit appearance --style dark --colors midnight` | Dark mode and a color scheme for every AWS Kit window (also in the window's menu) |
 
 Each tool's README has the full details.
 

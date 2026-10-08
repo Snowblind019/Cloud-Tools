@@ -77,6 +77,33 @@ Keyboard: Ctrl+1 to Ctrl+9 open the first nine pages, Ctrl+Page Up and Ctrl+Page
 
 All AWS calls run in the background, so the window stays usable during a scan.
 
+### Appearance
+
+**Appearance** in the menu (the button with three lines, top right) changes how every AWS Kit window looks:
+
+- **Style**: follow the system's light or dark setting, or always light, or always dark.
+- **Colors**: GTK's own colors, or one of nine color schemes (Ocean, Midnight, Fjord, Forest, Plum, Ember, Rose, Sand and Slate). Each one has a light and a dark version, so it follows the style.
+- **Accent**: the color of buttons like Scan and Check, selections and focus rings. Each scheme has its own, or pick one of nine, or any color. A very light or very dark custom color is adjusted so text on it stays readable, and in dark mode an accent is kept at least as light as GTK's own blue, since links and highlights use it as a text color there.
+- **Text size**: from 90% to 140%. At 100% AWS Kit leaves the font alone, so it keeps following the desktop's font settings.
+
+![The Appearance window in the Midnight scheme](docs/appearance.png)
+
+Changes show right away in every open AWS Kit window, including the PII Redact paste window, Image Redact and the profile picker, and are saved in `config.json`. With Follow system, the windows also switch when the desktop goes from light to dark. On Linux that happens right away, through the desktop's settings portal. On Windows and in WSL, AWS Kit reads Windows' app color setting (Settings, Personalization, Colors) when it starts and again every 45 seconds, so a switch there shows within a minute.
+
+![The main window in four schemes: Midnight and Forest in dark, Sand and Plum in light](docs/themes.png)
+
+The terminal has the same settings, which also helps if a choice ever makes the window hard to read:
+
+```bash
+awskit appearance                                  # what's set now
+awskit appearance --style dark --colors midnight   # pick a style and scheme
+awskit appearance --accent teal --text-size 110
+awskit appearance --list                           # every choice
+awskit appearance --reset                          # back to how GTK looks by itself
+```
+
+How it works: GTK's built-in theme (what every GTK 4 app gets without libadwaita) writes its colors out as plain values, so a scheme can't just redefine a few named colors. Light or dark on its own just switches GTK's own light or dark look, so a high contrast or other GTK theme you use stays in place. For a color scheme or an accent, AWS Kit takes the running GTK's own stylesheet, maps its grays onto the scheme (keeping how light each one is relative to the window and the text, so hover, pressed and border shades still work) and its blues onto the accent, leaves red, green and orange alone, and loads the result over GTK's theme. Since it starts from the installed GTK's stylesheet, every widget is covered and matches that GTK version. A gtk.css of your own in `~/.config/gtk-4.0/` still wins over it. The tkinter fallback window for Image Redact on Windows isn't themed.
+
 Besides the main window, four windows open on their own, which suits keybinds:
 
 | Window | Opens with | App ID |
@@ -234,6 +261,7 @@ On GNOME Wayland, clip mode depends on wl-clipboard, which GNOME doesn't fully s
 | `awskit scp` | Org & SCPs: `tree`, `show`, `test` and `save`, see [org-scps/](../org-scps/) |
 | `awskit profile` | Profile picker, see [profiles/](../profiles/) |
 | `awskit map` | Cloud Map: `scan`, `tf`, `export` (to `.drawio`, SVG or PNG), `edit` in the offline draw.io, `remember` and `layout` for the saved layout, and `design` for the designer (`new`, `edit`, `check`, `build`), and `reach` for reachability, see [cloud-map/](../cloud-map/) |
+| `awskit appearance` | Light or dark, color scheme, accent and text size, see [Appearance](#appearance) |
 | `awskit shell-init bash` | Print the shell hook for `awsp` (bash, zsh, fish or powershell) |
 | `awskit install` | Install to `~/.local` (what `install.sh` runs). `--drawio-zip PATH` and `--no-drawio` as above |
 | `awskit uninstall` | Remove it |
@@ -294,7 +322,7 @@ Everything lives in `~/.config/awskit/`:
 
 | File | What's in it |
 |---|---|
-| `config.json` | Lab Sweep, Exposure Audit, Cloud Map, Secrets Scan and Drift settings, below. Lab Sweep's **Settings** button edits it. |
+| `config.json` | Lab Sweep, Exposure Audit, Cloud Map, Secrets Scan, Drift and Appearance settings, below. Lab Sweep's **Settings** button edits it. |
 | `redact.json` | PII Redact's settings. Its **Settings** window edits it. Image Redact uses them too. See [pii-redact/](../pii-redact/). |
 | `image.json` | Image Redact's colors, widths and recent folders. The editor saves it as you go. See [image-redact/](../image-redact/). |
 | `current-profile` | The profile picked in Profiles. See [profiles/](../profiles/). |
@@ -314,6 +342,7 @@ Everything lives in `~/.config/awskit/`:
 | `cloud_map` | `{}` | What the Cloud Map page showed last. The page keeps it up to date. |
 | `secrets_scan` | `{}` | Secrets Scan's last folder and scan mode, and whether account IDs stop a commit. The page keeps it up to date. |
 | `drift` | `{}` | Drift's ignore list: IDs, Terraform addresses or `tag:KEY` for resources to leave out. The page's ignore button edits it. |
+| `appearance` | `{}` | `style` (`system`, `light` or `dark`), `colors` (a scheme name or `default`), `accent` (`default`, a name like `teal`, or a color like `#3584e4`) and `text_size` (a percentage). The Appearance window and `awskit appearance` edit it. Empty means follow the system with GTK's own colors. |
 
 Keys that a newer version of AWS Kit added are kept as they are when an older one saves the file.
 
@@ -404,6 +433,9 @@ awskit/                    shared app code (this folder)
 ├── cli.py                 every command, install and uninstall
 ├── common.py              AWS sessions, regions, errors, export, clipboard, notifications
 ├── widgets.py             shared GTK pieces: tables, details pane, pickers, dialogs
+├── theme.py               color schemes and accents, by recoloring GTK's stylesheet, no GTK
+├── appearance.py          applies them, follows the system and other windows, Appearance window
+├── docs/                  screenshots for this README
 └── app.py                 the main window and the small windows
 
 pii-redact/                one folder per tool
@@ -427,7 +459,7 @@ pip install --user moto
 python3 -m unittest discover -s tests -v
 ```
 
-They cover PII Redact against its sample file and its settings, Image Redact's box placement, OCR cleanup, saving, renaming and moving (plus reading a real rendered screenshot when tesseract is installed), the scan and teardown logic against fake EC2, EBS, KMS, Secrets Manager and S3 resources, the audit checks, the plan and policy rules against the files in each tool's `examples/` folder, profile parsing, and Cloud Map: its Terraform input, model, layout and draw.io output against its example states (stable IDs, byte-identical output, real draw.io shape names, flags, layers and redaction), its live scan against fake Organizations, IAM, EC2 and CloudTrail, including the AccessDenied path, the renderer behind its page and its SVG and PNG export (stable sizes, hit testing at several zoom levels, redacted SVGs, the icon reader and the draw.io download check), its designer (each check against a broken example, the generated files against a saved copy, the folder rules, and a plan of the output read back into the same map), and its editor: layout memory round trips (moved boxes, captions, colors and notes surviving a rescan with a resource added and one removed, redacted files, and a file saved by the real draw.io), the local server over HTTP (tokens, paths it refuses, saving, shutting down), `awskit map edit`, and finding Edge and the fallback order with Windows mocked, plus reachability through security groups, network ACLs, routes, peering, NAT and internet gateways, and its panel on the page. The newer tools each have their own test file: Secrets Scan against throwaway git repos (including hostile repo settings that must not run anything), Credentials against fake IAM and hand-made credential reports, Least Privilege against hand-made CloudTrail events and trail files, Drift against fake AWS and hand-made Terraform states (with fake secrets that must never show up), Org & SCPs against fake Organizations and every condition operator, and CloudTrail's security events against recorded events.
+They cover PII Redact against its sample file and its settings, Image Redact's box placement, OCR cleanup, saving, renaming and moving (plus reading a real rendered screenshot when tesseract is installed), the scan and teardown logic against fake EC2, EBS, KMS, Secrets Manager and S3 resources, the audit checks, the plan and policy rules against the files in each tool's `examples/` folder, profile parsing, and Cloud Map: its Terraform input, model, layout and draw.io output against its example states (stable IDs, byte-identical output, real draw.io shape names, flags, layers and redaction), its live scan against fake Organizations, IAM, EC2 and CloudTrail, including the AccessDenied path, the renderer behind its page and its SVG and PNG export (stable sizes, hit testing at several zoom levels, redacted SVGs, the icon reader and the draw.io download check), its designer (each check against a broken example, the generated files against a saved copy, the folder rules, and a plan of the output read back into the same map), and its editor: layout memory round trips (moved boxes, captions, colors and notes surviving a rescan with a resource added and one removed, redacted files, and a file saved by the real draw.io), the local server over HTTP (tokens, paths it refuses, saving, shutting down), `awskit map edit`, and finding Edge and the fallback order with Windows mocked, plus reachability through security groups, network ACLs, routes, peering, NAT and internet gateways, and its panel on the page. The newer tools each have their own test file: Secrets Scan against throwaway git repos (including hostile repo settings that must not run anything), Credentials against fake IAM and hand-made credential reports, Least Privilege against hand-made CloudTrail events and trail files, Drift against fake AWS and hand-made Terraform states (with fake secrets that must never show up), Org & SCPs against fake Organizations and every condition operator, and CloudTrail's security events against recorded events. Appearance is tested on its own color math, on every scheme against the installed GTK's real stylesheet (text contrast of at least 7:1 on the window and in views, no rule lost), on `awskit appearance`, and in a real window that changes when another process saves new settings. Zooming in Image Redact and Cloud Map is tested with wheel and touchpad scroll events.
 
 `AWSKIT_TF_TEST=1` adds a test that runs terraform or tofu on the designer's output (fmt, init, validate and an offline plan). It needs the AWS provider, from the registry or a mirror in `TF_CLI_CONFIG_FILE`. `AWSKIT_EDITOR_TEST=1` adds one more that opens the real draw.io editor in WebKitGTK, with networking blocked when `unshare` can, and checks it loads and saves without reaching anything outside the machine. It needs WebKitGTK 6.0, draw.io downloaded, and a display or `xvfb-run`.
 

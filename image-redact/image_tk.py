@@ -12,6 +12,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 import traceback
 from tkinter import colorchooser, filedialog, messagebox, ttk
@@ -591,7 +592,10 @@ class TkEditor:
             return
         w, h = self.canvas.winfo_width(), self.canvas.winfo_height()
         vx, vy = anchor if anchor else (w / 2, h / 2)
-        ix, iy = self.to_image(vx, vy)
+        # Worked out fresh rather than from the last drawn frame, which is behind when
+        # several wheel notches come in before the next redraw.
+        ox, oy = self._offsets(max(w, 2), max(h, 2))
+        ix, iy = (vx - ox) / self.zoom, (vy - oy) / self.zoom
         self.fit = False
         self.zoom = ie.clamp_zoom(zoom)
         # Keep the spot under the pointer in place.
@@ -603,19 +607,33 @@ class TkEditor:
         self.set_zoom(ie.step_zoom(self.zoom, direction), anchor)
 
     def _wheel(self, event, delta=None):
+        """The wheel zooms toward the pointer, with or without Ctrl. Shift+wheel scrolls up
+        and down, Ctrl+Shift+wheel sideways."""
         delta = delta if delta is not None else event.delta
         if self.ed.surface is None or not delta:
             return
-        if event.state & 0x0004:  # Ctrl
-            self.step_zoom(1 if delta > 0 else -1, (event.x, event.y))
+        ctrl, shift = event.state & 0x0004, event.state & 0x0001
+        if shift:
+            step = -60 * (delta / 120)
+            if ctrl:
+                self.sx += step
+            else:
+                self.sy += step
+            self.fit = False
+            self.render()
             return
-        step = -60 * (delta / 120)
-        if event.state & 0x0001:  # Shift scrolls sideways
-            self.sx += step
-        else:
-            self.sy += step
-        self.fit = False
-        self.render()
+        # 120 is one notch. Precision touchpads and smooth wheels send smaller parts, which
+        # add up until a whole notch is there. A pause or a change of direction starts again.
+        total, last_dir, last_time = getattr(self, "_wheel_acc", (0.0, 0, 0.0))
+        now = time.monotonic()
+        direction = 1 if delta > 0 else -1
+        if direction != last_dir or now - last_time > 0.4:
+            total = 0.0
+        total += delta / 120
+        steps = int(total + (0.02 if total > 0 else -0.02))
+        self._wheel_acc = (total - steps, direction, now)
+        for _ in range(abs(steps)):
+            self.step_zoom(1 if steps > 0 else -1, (event.x, event.y))
 
     def _pan_begin(self, event):
         self._pan = (event.x, event.y, self.sx, self.sy)

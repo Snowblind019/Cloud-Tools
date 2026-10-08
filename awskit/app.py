@@ -26,7 +26,7 @@ except (ImportError, ValueError) as exc:
              "Arch:          sudo pacman -S python-gobject gtk4\n"
              "Every tool also works from the terminal: awskit --help")
 
-from . import profiles  # noqa: E402
+from . import appearance, profiles  # noqa: E402
 from .common import (APP_ID, APP_NAME, CURRENT_PROFILE_FILE, IMAGE_APP_ID,  # noqa: E402
                      PICKER_APP_ID, REDACT_APP_ID, REDACT_SETTINGS_APP_ID, VERSION)
 from .audit_page import AuditPage  # noqa: E402
@@ -72,6 +72,12 @@ class MainWindow(Gtk.ApplicationWindow):
         about_pop = Gtk.Popover()
         about_box = vbox(4)
         margins(about_box, 10)
+        look = button("Appearance", lambda: (about_pop.popdown(), appearance.show_window(self)),
+                      tooltip="Light or dark, color scheme, accent color and text size")
+        look.add_css_class("flat")
+        look.get_child().set_xalign(0)
+        about_box.append(look)
+        about_box.append(Gtk.Separator())
         about_box.append(label(f"{APP_NAME} {VERSION}", "heading"))
         about_box.append(label("Ctrl+1 to Ctrl+9 open the first nine pages, and Ctrl+Page Up "
                                "and Ctrl+Page Down go through all of them.\nEvery tool also runs "
@@ -217,6 +223,7 @@ class App(Gtk.Application):
     def do_startup(self):
         Gtk.Application.do_startup(self)
         install_css()
+        appearance.start()
 
     def do_activate(self):
         win = self.get_active_window()

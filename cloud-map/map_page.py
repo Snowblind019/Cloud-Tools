@@ -23,8 +23,8 @@ from .map_edit import EditController
 from .common import error_text, load_config, save_config
 from .widgets import (CheckListButton, DetailPane, Page, account_pickers, button, chosen_profiles,
                       clear_box, fill_accounts, flash, hbox, label, margins, on_main, open_file,
-                      run_bg, set_clipboard, sev_badge, show_message, spacer, string_dropdown,
-                      vbox)
+                      run_bg, scroll_kind, set_clipboard, sev_badge, show_message, spacer,
+                      string_dropdown, vbox)
 
 MAP_TYPES = list(maplayout.MAP_TYPES)
 MAP_TYPE_TITLES = ["Access", "Network", "Combined"]
@@ -105,6 +105,10 @@ class MapCanvas(Gtk.DrawingArea):
         scroll = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.BOTH_AXES)
         scroll.connect("scroll", self._scrolled)
         self.add_controller(scroll)
+        pinch = Gtk.GestureZoom()
+        pinch.connect("begin", self._pinch_begin)
+        pinch.connect("scale-changed", self._pinch_changed)
+        self.add_controller(pinch)
 
         motion = Gtk.EventControllerMotion()
         motion.connect("motion", self._moved)
@@ -354,17 +358,37 @@ class MapCanvas(Gtk.DrawingArea):
             self.select(hit[1], None)
 
     def _scrolled(self, controller, dx, dy):
+        """The wheel zooms toward the pointer, Shift+wheel moves sideways. A touchpad moves
+        the map with two fingers, and zooms with Ctrl held or a pinch."""
         if self.scene is None:
             return False
         state = controller.get_current_event_state()
-        if state & Gdk.ModifierType.SHIFT_MASK and not state & Gdk.ModifierType.CONTROL_MASK:
-            self.ox += dy * 40 / self.zoom
+        ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+        kind = scroll_kind(controller)
+        if kind == "touchpad" and not ctrl:
+            self.ox += dx / self.zoom          # scrolling down shows what's further down
+            self.oy += dy / self.zoom
+            self.queue_draw()
+            return True
+        if state & Gdk.ModifierType.SHIFT_MASK and not ctrl:
+            self.ox += (dy or dx) * (40 if kind == "wheel" else 1) / self.zoom
             self.queue_draw()
             return True
         anchor = self.pointer or (self.get_width() / 2, self.get_height() / 2)
         if dy:
-            self.zoom_by(ZOOM_STEP ** (-dy), anchor)
+            # a notch is one step; touchpads and fine wheels report distances instead
+            power = -dy if kind == "wheel" else -dy / (60 if kind == "touchpad" else 15)
+            self.zoom_by(ZOOM_STEP ** power, anchor)
         return True
+
+    def _pinch_begin(self, gesture, sequence):
+        ok, x, y = gesture.get_bounding_box_center()
+        self._pinch = (self.zoom, (x, y) if ok else None)
+
+    def _pinch_changed(self, gesture, scale):
+        if self.scene is not None and getattr(self, "_pinch", None):
+            zoom0, anchor = self._pinch
+            self.set_zoom(zoom0 * scale, anchor)
 
     def _moved(self, controller, x, y):
         self.pointer = (x, y)

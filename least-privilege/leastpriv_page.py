@@ -5,7 +5,7 @@ from pathlib import Path
 
 from gi.repository import Gdk, Gio, GLib, Gtk
 
-from . import leastpriv, profiles
+from . import appearance, leastpriv, profiles
 from .common import AuthError, AwsContext, error_text, write_atomic
 from .widgets import (CheckListButton, Page, ResultTable, all_regions, button, clear_box,
                       flash, hbox, label, margins, on_main, open_file, run_bg, set_clipboard,
@@ -173,12 +173,9 @@ class LeastPrivPage(Page):
             getattr(self.view, f"set_{side}_margin")(10)
         self.buffer = self.view.get_buffer()
         self.hl_tag = self.buffer.create_tag("hl")
-        band, ink = Gdk.RGBA(), Gdk.RGBA()
-        band.parse("rgba(53, 132, 228, 0.18)")
-        ink.parse("#3584e4")
-        self.hl_tag.set_property("paragraph-background-rgba", band)
-        self.hl_tag.set_property("foreground-rgba", ink)
         self.hl_tag.set_property("weight", 700)
+        self._color_highlight()
+        appearance.on_change(lambda _variant: self._color_highlight())
         self.buffer.set_text("The draft policy shows up here.")
         scroller = Gtk.ScrolledWindow()
         scroller.set_child(self.view)
@@ -211,6 +208,16 @@ class LeastPrivPage(Page):
         self.append(self.status)
         self.fill_regions()
         self.update_hint()
+
+    def _color_highlight(self):
+        """The highlighted statement in the draft, in the accent color."""
+        accent = appearance.current_accent()
+        band, ink = Gdk.RGBA(), Gdk.RGBA()
+        ink.parse(accent)
+        band.parse(accent)
+        band.alpha = 0.18
+        self.hl_tag.set_property("paragraph-background-rgba", band)
+        self.hl_tag.set_property("foreground-rgba", ink)
 
     # ------------------------------------------------------------------ building the UI
     def _role_picker(self):

@@ -9,7 +9,8 @@ from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 from . import imageedit as ie
 from . import imageredact as ir
 from .common import ClipboardError, is_wsl, read_clipboard_image, write_clipboard_image
-from .widgets import Page, button, hbox, label, margins, run_bg, show_message, vbox
+from .widgets import (Page, button, hbox, label, margins, run_bg, scroll_kind,
+                      show_message, vbox)
 
 PAD = ie.PAD
 
@@ -57,7 +58,10 @@ class ImageEditor(Gtk.Box):
         self.ox = self.oy = PAD
         self.text_request = None
         self._loading_style = False
-        self._scroll_target = None
+        self._zoom_anchor = None        # (image x, image y, view x, view y) to keep in place
+        self._wheel = [0.0, 0.0, 0]     # notches so far, last direction, time of last one
+        self._pinch = None
+        self._pointer_view = None
         self._settings_win = None
         self.ocr_ok, self.ocr_msg = ir.ocr_status()
 
@@ -203,10 +207,10 @@ class ImageEditor(Gtk.Box):
         motion = Gtk.EventControllerMotion()
         motion.connect("motion", self._motion)
         self.area.add_controller(motion)
-        scroll = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
-        scroll.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        scroll.connect("scroll", self._scrolled)
-        self.area.add_controller(scroll)
+        pinch = Gtk.GestureZoom()
+        pinch.connect("begin", self._pinch_begin)
+        pinch.connect("scale-changed", self._pinch_changed)
+        self.area.add_controller(pinch)
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._key_pressed)
         self.area.add_controller(keys)
@@ -221,8 +225,22 @@ class ImageEditor(Gtk.Box):
         self.scroller.set_vexpand(True)
         self.scroller.get_hadjustment().connect("changed", self._adjustment_changed)
         self.scroller.get_vadjustment().connect("changed", self._adjustment_changed)
+        # Where the pointer is in the visible part, which stays put while the image moves
+        # under it as it zooms.
+        where = Gtk.EventControllerMotion()
+        where.connect("enter", self._pointer_moved)
+        where.connect("motion", self._pointer_moved)
+        self.scroller.add_controller(where)
         frame = Gtk.Frame()
         frame.set_child(self.scroller)
+        # The wheel is handled on the frame around the scroller, before anything inside it
+        # sees the event. Once a smooth scroll starts (a high resolution wheel never ends
+        # one), the scroller takes every scroll for itself first, which is why zooming
+        # worked only some of the time when this sat on the image.
+        wheel = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.BOTH_AXES)
+        wheel.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        wheel.connect("scroll", self._scrolled)
+        frame.add_controller(wheel)
         return frame
 
     def _build_file_bar(self):
@@ -564,6 +582,7 @@ class ImageEditor(Gtk.Box):
     # ================================================================== zoom
     def zoom_fit(self):
         self.fit = True
+        self._zoom_anchor = None
         self.area.set_content_width(1)
         self.area.set_content_height(1)
         self._fit_zoom(self.area.get_width(), self.area.get_height())
@@ -578,53 +597,153 @@ class ImageEditor(Gtk.Box):
         if self.fit:
             self._fit_zoom(w, h)
 
+    def _content_size(self):
+        """The canvas size at the current zoom (1x1 in fit mode, where it fills the view)."""
+        if self.fit:
+            return 1, 1
+        iw, ih = self.ed.size
+        return int(iw * self.zoom + 2 * PAD), int(ih * self.zoom + 2 * PAD)
+
+    def _layout(self):
+        """Where the image sits on the canvas at the current zoom, and where the view is
+        scrolled to, including a zoom that isn't laid out yet. So several wheel notches in a
+        row each start from where the one before is going, not from the last drawn frame."""
+        hadj, vadj = self.scroller.get_hadjustment(), self.scroller.get_vadjustment()
+        cw, ch = self._content_size()
+        ox, oy = ie.offsets(self.ed.size, self.zoom, max(cw, hadj.get_page_size()),
+                            max(ch, vadj.get_page_size()))
+        if self._zoom_anchor is not None:
+            ix, iy, vx, vy = self._zoom_anchor
+            sx, sy = ox + ix * self.zoom - vx, oy + iy * self.zoom - vy
+        else:
+            sx, sy = hadj.get_value(), vadj.get_value()
+        return sx, sy, ox, oy
+
     def set_zoom(self, zoom, anchor=None):
+        """Zoom to zoom, keeping the image point under anchor (a point in the visible part,
+        the middle by default) where it is."""
         if self.ed.surface is None:
             return
-        zoom = ie.clamp_zoom(zoom)
         hadj, vadj = self.scroller.get_hadjustment(), self.scroller.get_vadjustment()
         if anchor is None:
             anchor = (hadj.get_page_size() / 2, vadj.get_page_size() / 2)
         vx, vy = anchor
-        ix, iy = self.to_image(hadj.get_value() + vx, vadj.get_value() + vy)
+        sx, sy, ox, oy = self._layout()
+        ix, iy = (sx + vx - ox) / self.zoom, (sy + vy - oy) / self.zoom
         self.fit = False
-        self.zoom = zoom
-        iw, ih = self.ed.size
-        cw, ch = int(iw * zoom + 2 * PAD), int(ih * zoom + 2 * PAD)
+        self.zoom = ie.clamp_zoom(zoom)
+        cw, ch = self._content_size()
         self.area.set_content_width(cw)
         self.area.set_content_height(ch)
-        # Keep the same spot under the pointer once the new size is laid out.
-        ox, oy = ie.offsets(self.ed.size, zoom, max(cw, hadj.get_page_size()),
-                            max(ch, vadj.get_page_size()))
-        self._scroll_target = (ox + ix * zoom - vx, oy + iy * zoom - vy)
+        self._zoom_anchor = (ix, iy, vx, vy)
         self._adjustment_changed()
         self._refresh()
 
     def _adjustment_changed(self, *_):
-        if self._scroll_target is None:
+        """Scroll so the zoom anchor stays under the pointer. Runs again as the new size is
+        laid out, and lets go once the canvas has its new size."""
+        if self._zoom_anchor is None:
             return
-        tx, ty = self._scroll_target
-        for adj, value in ((self.scroller.get_hadjustment(), tx),
-                           (self.scroller.get_vadjustment(), ty)):
+        ix, iy, vx, vy = self._zoom_anchor
+        hadj, vadj = self.scroller.get_hadjustment(), self.scroller.get_vadjustment()
+        cw, ch = self._content_size()
+        sizes = (max(cw, hadj.get_page_size()), max(ch, vadj.get_page_size()))
+        ox, oy = ie.offsets(self.ed.size, self.zoom, *sizes)
+        done = True
+        for adj, value, size in ((hadj, ox + ix * self.zoom - vx, sizes[0]),
+                                 (vadj, oy + iy * self.zoom - vy, sizes[1])):
             adj.set_value(min(max(value, 0), max(adj.get_upper() - adj.get_page_size(), 0)))
+            if abs(adj.get_upper() - size) > 0.5:
+                done = False
+        if done:
+            self._zoom_anchor = None
 
     def step_zoom(self, direction, anchor=None):
         self.set_zoom(ie.step_zoom(self.zoom, direction), anchor)
 
-    def _scrolled(self, ctrl, dx, dy):
-        state = ctrl.get_current_event_state()
-        if not state & Gdk.ModifierType.CONTROL_MASK or self.ed.surface is None:
-            return False
+    def _pointer_moved(self, ctrl, x, y):
+        self._pointer_view = (x, y)
+
+    def _pointer_anchor(self):
+        if self._pointer_view is not None:
+            return self._pointer_view
         hadj, vadj = self.scroller.get_hadjustment(), self.scroller.get_vadjustment()
-        px, py = getattr(self, "_pointer", (hadj.get_page_size() / 2, vadj.get_page_size() / 2))
-        anchor = (px - hadj.get_value(), py - vadj.get_value())
-        self.step_zoom(-1 if dy > 0 else 1, anchor)
+        return hadj.get_page_size() / 2, vadj.get_page_size() / 2
+
+    def _scrolled(self, ctrl, dx, dy):
+        """The mouse wheel zooms toward the pointer, with or without Ctrl. Shift+wheel and
+        a tilting wheel scroll. A touchpad scrolls, and zooms with Ctrl held or a pinch."""
+        if self.ed.surface is None or not self._over_image():
+            return False
+        state = ctrl.get_current_event_state()
+        ctrl_held = bool(state & Gdk.ModifierType.CONTROL_MASK)
+        shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+        kind = scroll_kind(ctrl)
+        if kind == "touchpad" and not ctrl_held:
+            return False                    # the scroller pans, with its own momentum
+        if shift and not ctrl_held:
+            self._scroll_view(dx, dy, kind)
+            return True
+        if not dy:
+            if dx:
+                self._scroll_view(dx, 0, kind)
+            return True
+        anchor = self._pointer_anchor()
+        if kind == "wheel":
+            steps = self._wheel_steps(dy)
+            for _ in range(abs(steps)):
+                self.step_zoom(-1 if steps > 0 else 1, anchor)
+        else:
+            # Touchpad with Ctrl, or a fine-grained wheel that reports distances: smooth.
+            self.set_zoom(self.zoom * 2 ** (-dy / (150 if kind == "touchpad" else 60)), anchor)
         return True
 
+    def _over_image(self):
+        """False over the scrollbars, where the wheel should still just scroll."""
+        if self._pointer_view is None:
+            return True
+        hit = self.scroller.pick(*self._pointer_view, Gtk.PickFlags.DEFAULT)
+        return hit is None or hit is self.area or hit is self.scroller or \
+            hit.is_ancestor(self.area)
+
+    def _wheel_steps(self, dy):
+        """Whole notches from wheel deltas. A high resolution wheel sends parts of a notch,
+        so they add up until a whole one is there. A pause or a change of direction starts
+        again."""
+        total, last_dir, last_time = self._wheel
+        now = GLib.get_monotonic_time()
+        direction = 1 if dy > 0 else -1
+        if direction != last_dir or now - last_time > 400000:
+            total = 0.0
+        total += dy
+        steps = int(total + (0.02 if total > 0 else -0.02))
+        total -= steps
+        self._wheel = [total, direction, now]
+        return steps
+
+    def _scroll_view(self, dx, dy, kind):
+        self._zoom_anchor = None
+        for adj, delta in ((self.scroller.get_hadjustment(), dx),
+                           (self.scroller.get_vadjustment(), dy)):
+            if delta:
+                step = delta * adj.get_page_size() ** (2 / 3) if kind == "wheel" else delta
+                adj.set_value(min(max(adj.get_value() + step, 0),
+                                  max(adj.get_upper() - adj.get_page_size(), 0)))
+
+    def _pinch_begin(self, gesture, sequence):
+        ok, x, y = gesture.get_bounding_box_center()
+        sx, sy, _ox, _oy = self._layout()
+        self._pinch = (self.zoom, (x - sx, y - sy) if ok else None)
+
+    def _pinch_changed(self, gesture, scale):
+        if self._pinch is not None and self.ed.surface is not None:
+            zoom0, anchor = self._pinch
+            self.set_zoom(zoom0 * scale, anchor)
+
     def _pan_begin(self, gesture, x, y):
+        self._zoom_anchor = None
         self._pan_start = (self.scroller.get_hadjustment().get_value(),
                            self.scroller.get_vadjustment().get_value())
-        self._scroll_target = None
 
     def _pan_update(self, gesture, dx, dy):
         hx, vy = self._pan_start
@@ -669,7 +788,6 @@ class ImageEditor(Gtk.Box):
         self._refresh()
 
     def _motion(self, ctrl, x, y):
-        self._pointer = (x, y)
         if self.ed.surface is None or self.ed.drag:
             return
         if self.ed.tool == "select":

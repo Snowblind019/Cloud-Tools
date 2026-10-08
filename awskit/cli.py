@@ -11,10 +11,11 @@ import sys
 import threading
 from pathlib import Path
 
-from .common import (APP_ID, APP_NAME, IMAGE_APP_ID, PICKER_APP_ID, REDACT_APP_ID,
-                     REDACT_SETTINGS_APP_ID, SEVERITY_COLOR, SEVERITY_ORDER, VERSION,
-                     AuthError, ClipboardError, color, load_config, money, notify, parse_when,
-                     pii_redact, table_text, terminal_safe, to_markdown, write_clipboard)
+from .common import (APP_ID, APP_NAME, CONFIG_FILE, IMAGE_APP_ID, PICKER_APP_ID,
+                     REDACT_APP_ID, REDACT_SETTINGS_APP_ID, SEVERITY_COLOR, SEVERITY_ORDER,
+                     VERSION, AuthError, ClipboardError, color, load_config, money, notify,
+                     parse_when, pii_redact, save_config, table_text, terminal_safe, to_markdown,
+                     write_clipboard)
 
 PAGES = ("redact", "image", "secrets", "sweep", "audit", "creds", "trail", "leastpriv", "plan",
          "drift", "policy", "scp", "profiles", "map")
@@ -601,6 +602,58 @@ def cmd_policy(args) -> int:
     return fail_exit(findings, args.fail_on)
 
 
+# =================================================================== appearance
+
+def cmd_appearance(args) -> int:
+    from . import theme
+    cfg = load_config()
+    settings = theme.clean_settings(cfg.get("appearance"))
+    if args.list:
+        print("Styles:     " + ", ".join(theme.STYLES))
+        print("Colors:     " + ", ".join(theme.SCHEME_KEYS))
+        print("Accents:    default (the color scheme's own), " +
+              ", ".join(k for k, _n, _h in theme.ACCENTS) + ", or a color like #3584e4")
+        print("Text sizes: " + ", ".join(f"{pct} ({name.lower()})"
+                                         for pct, name in theme.TEXT_SIZES))
+        return 0
+    changed = False
+    if args.reset:
+        settings, changed = dict(theme.DEFAULTS), True
+    if args.style:
+        settings["style"], changed = args.style, True
+    if args.colors:
+        settings["colors"], changed = args.colors, True
+    if args.accent:
+        accent = args.accent.strip().lower()
+        if accent != "default" and accent not in theme.ACCENT_HEX and \
+                not re.fullmatch(r"#[0-9a-f]{6}", accent):
+            err(f"{args.accent} isn't an accent. Use default, one of "
+                f"{', '.join(theme.ACCENT_HEX)}, or a color like #3584e4.")
+            return 2
+        settings["accent"], changed = accent, True
+    if args.text_size is not None:
+        if not 70 <= args.text_size <= 200:
+            err("The text size is a percentage from 70 to 200, like 110.")
+            return 2
+        settings["text_size"], changed = args.text_size, True
+    if changed:
+        cfg["appearance"] = theme.clean_settings(settings)
+        if not save_config(cfg):
+            err(f"Couldn't save {CONFIG_FILE}.")
+            return 1
+        settings = cfg["appearance"]
+        print("Saved. Open AWS Kit windows change right away.", file=sys.stderr)
+    accent = settings["accent"]
+    if accent == "default":
+        own = theme.scheme(settings["colors"]).accent
+        accent = f"default ({own})" if own else "default (GTK's blue)"
+    print(f"Style:      {settings['style']}")
+    print(f"Colors:     {settings['colors']}")
+    print(f"Accent:     {accent}")
+    print(f"Text size:  {settings['text_size']}%")
+    return 0
+
+
 # =================================================================== profile
 
 def cmd_profile(args) -> int:
@@ -950,7 +1003,7 @@ def cmd_gui(args) -> int:
 # =================================================================== parser
 
 def build_parser() -> argparse.ArgumentParser:
-    from . import audit, iampolicy, sweep, trail
+    from . import audit, iampolicy, sweep, theme, trail
     p = argparse.ArgumentParser(
         prog="awskit",
         description="AWS and Terraform tools. Run with no arguments to open the window.",
@@ -1067,6 +1120,21 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--clear", action="store_true", help="Go back to no profile")
     pr.add_argument("--login", metavar="NAME", help="Run aws sso login for NAME")
     pr.set_defaults(func=cmd_profile)
+
+    ap = sub.add_parser("appearance", help="Light or dark, color scheme, accent and text size",
+                        description="Shows or changes how the AWS Kit windows look. The same "
+                        "settings as Appearance in the window's menu.")
+    ap.add_argument("--style", choices=("system", "light", "dark"),
+                    help="Follow the system's light or dark setting, or pick one")
+    ap.add_argument("--colors", choices=theme.SCHEME_KEYS, metavar="SCHEME",
+                    help="Color scheme: " + ", ".join(theme.SCHEME_KEYS))
+    ap.add_argument("--accent", help="default, blue, teal, green, yellow, orange, red, pink, "
+                                     "purple, slate, or a color like #3584e4")
+    ap.add_argument("--text-size", type=int, metavar="PERCENT",
+                    help="90, 100, 110, 125 or 140 (any from 70 to 200 works)")
+    ap.add_argument("--reset", action="store_true", help="Back to how GTK looks by itself")
+    ap.add_argument("-l", "--list", action="store_true", help="List every choice")
+    ap.set_defaults(func=cmd_appearance)
 
     sh = sub.add_parser("shell-init", help="Print the shell hook for awsp and the prompt")
     sh.add_argument("shell", nargs="?", default="powershell" if sys.platform == "win32"

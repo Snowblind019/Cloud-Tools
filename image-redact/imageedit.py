@@ -33,7 +33,7 @@ TOOLS = [
 ]
 
 SHORTCUTS_HELP = ("V C R O L A P T pick tools. Ctrl+S saves, Ctrl+C copies, F2 renames, Ctrl+M "
-                  "moves. Ctrl+scroll zooms, middle-drag pans.")
+                  "moves. The wheel zooms, Shift+wheel scrolls, middle-drag pans.")
 
 # Shown when Save or Copy is tried while text detection is still running.
 BUSY = ("Text detection is still running. Save and Copy work again once it's done, so "

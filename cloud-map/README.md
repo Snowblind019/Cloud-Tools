@@ -84,7 +84,7 @@ Every change redraws the map straight away. The page remembers the last snapshot
 
 **In the middle** is the map:
 
-- Drag to pan. Scroll to zoom, centered on the pointer. Shift and scroll pans sideways
+- Drag to pan. Scroll to zoom, centered on the pointer. Shift and scroll pans sideways. On a touchpad, two-finger scrolling pans, and pinching or Ctrl with two-finger scrolling zooms
 - `+` and `-` zoom, `0` goes to 100%, `F` fits the map in the window, the arrow keys pan, Esc clears the selection. The same buttons are in the top bar
 - Hover a box or a line for its tooltip, the same one draw.io shows
 - Click a box to select it and open its details. Click a line to highlight it and both of its ends

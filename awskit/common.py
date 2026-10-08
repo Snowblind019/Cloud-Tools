@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = "1.5.1"
+VERSION = "1.6.0"
 APP_NAME = "AWS Kit"
 APP_ID = "io.github.Snowblind019.AwsKit"
 PICKER_APP_ID = APP_ID + ".Profiles"
@@ -61,6 +61,8 @@ DEFAULT_CONFIG = {
     "secrets_scan": {},
     # Drift: resources to leave out of the comparison, by ID or tag.
     "drift": {},
+    # How the windows look: style, colors, accent and text size (see theme.py).
+    "appearance": {},
 }
 
 
