@@ -6,7 +6,7 @@ These are small tools I made for my own AWS and Terraform work on Fedora. Each o
 
 They all live in one Linux app called **AWS Kit**: one GTK 4 window with a sidebar of all fourteen tools, plus commands for everything in the terminal.
 
-https://github.com/user-attachments/assets/43af88f6-4ea2-4aba-921e-87e9340f50f9
+![AWS Kit open on the PII Redact page](pii-redact/docs/screenshot.png)
 
 ## How I built these
 
@@ -69,6 +69,7 @@ All of AWS Kit runs on Windows 10 and 11 too, natively, with the same window and
 AWS Kit also runs on WSL2 with WSLg. Install the same packages inside the distro and run `./install.sh` as usual. A few things work differently there:
 
 - The windows draw in software instead of on the GPU. WSL usually doesn't have a GL driver GTK can use, and GTK 4 crashes on startup without one, so AWS Kit switches to software drawing by itself. To try the GPU anyway, run `GSK_RENDERER=ngl awskit`.
+- The windows go through WSLg's X11 side instead of Wayland. On Wayland, WSLg leaves menus, dropdowns and other popups on the screen after they close ([microsoft/wslg#1265](https://github.com/microsoft/wslg/issues/1265)), so the profile menu and the main menu would get stuck there until AWS Kit quits. If X11 isn't there, it uses Wayland anyway. To pick Wayland yourself, run `GDK_BACKEND=wayland awskit`.
 - Copying goes straight to the Windows clipboard through `clip.exe`, and `pii-redact clip` reads it back with PowerShell, so you can copy in any Windows app, run it, and paste. wl-clipboard isn't needed, but it's used as a fallback if PowerShell is blocked.
 - Image Redact pastes and copies images through the Windows clipboard with PowerShell too, so a screenshot from Win+Shift+S pastes straight in, and the finished image pastes into any Windows app.
 - Cloud Map's editor tries WebKitGTK with its GPU paths turned off. If it won't start, it opens in Windows instead, in Edge's app window or the default browser, and saves still come back to the map.

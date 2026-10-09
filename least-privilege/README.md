@@ -66,6 +66,7 @@ The service prefix comes from the event's source (the part before `.amazonaws.co
 | S3 `ListBuckets` | `s3:ListAllMyBuckets` |
 | S3 `CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload` | `s3:PutObject` |
 | S3 `CopyObject` | `s3:PutObject` on the target, `s3:GetObject` on the source |
+| S3 calls for one version of an object (with a `versionId`), like `GetObject`, `HeadObject`, `DeleteObject` or `GetObjectTagging` | `s3:GetObjectVersion`, `s3:DeleteObjectVersion`, `s3:GetObjectVersionTagging` and the rest of that family. A `CopyObject` from one version of the source reads it with `s3:GetObjectVersion`. |
 | S3 `DeleteObjects` | `s3:DeleteObject` |
 | S3 `ListMultipartUploads`, `ListParts` | `s3:ListBucketMultipartUploads`, `s3:ListMultipartUploadParts` |
 | S3 bucket settings, like `GetBucketEncryption`, `DeleteBucketLifecycle`, `GetBucketCors`, `PutObjectLockConfiguration` | `s3:GetEncryptionConfiguration`, `s3:PutLifecycleConfiguration`, `s3:GetBucketCORS`, `s3:PutBucketObjectLockConfiguration` and the rest of that family |
@@ -102,7 +103,7 @@ Where the event says what was touched, the draft names it, using the account and
 | SNS | The topic's ARN |
 | KMS | `key/KEY-ID`, from the event's resource list or the key ID |
 | Secrets Manager | `secret:NAME-??????`, since secret ARNs end in 6 random characters |
-| SSM | `parameter/NAME`, and the path plus `/*` for `GetParametersByPath`. `SendCommand` and `StartSession` get the document and the instances. |
+| SSM | `parameter/NAME`, and the path plus `/*` for `GetParametersByPath`. A version or label after the name, like `NAME:3`, isn't part of the ARN, so it's left off. `SendCommand` and `StartSession` get the document and the instances. |
 | CloudWatch Logs | `log-group:NAME:*` |
 | IAM | `role/NAME`, `user/NAME`, `group/NAME`, `instance-profile/NAME`, or the policy ARN |
 | EC2 | `instance/ID` for start, stop, reboot, terminate and similar, `security-group/ID` for rule changes, `volume/ID`, and tagged resources by their ID |
@@ -237,7 +238,7 @@ Missing permissions don't stop it. A region it can't read, a policy it can't ope
 - **Resource-level support** varies by action. Where it isn't sure an action supports a resource type, it uses `"*"`. Policy Check then flags the risky ones, like `iam:PassRole` on any role.
 - **Other policies still apply.** A permissions boundary, an SCP or a resource policy can allow or deny things the draft doesn't show.
 - **Large drafts**: a managed policy can be at most 6,144 characters without spaces. The notes warn when the draft is bigger.
-- **Files** are read with limits, since they're untrusted: up to 100 MB per file once unpacked (a gzip file that unpacks to more is refused without unpacking the rest), 1 GB in all, and 20,000 files. Events are counted as they're read, not all kept in memory. Anything that isn't JSON, or isn't CloudTrail events, is skipped with a note, and so is a single record that can't be read. Inside a folder, links and anything that isn't a plain file (like a named pipe, which would wait forever) are skipped too; a file you name directly is read as given.
+- **Files** are read with limits, since they're untrusted: up to 100 MB per file once unpacked (a gzip file that unpacks to more is refused without unpacking the rest), 1 GB in all, and 20,000 files. Events are counted as they're read, not all kept in memory. Files can be UTF-8 or UTF-16, which is what Windows PowerShell 5 writes with `aws cloudtrail lookup-events > events.json`. Anything that isn't JSON, or isn't CloudTrail events, is skipped with a note, and so is a single record that can't be read. Inside a folder, links and anything that isn't a plain file (like a named pipe, which would wait forever) are skipped too; a file you name directly is read as given.
 
 ## Files
 

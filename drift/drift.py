@@ -296,7 +296,10 @@ def parse_json(data, name="input") -> dict:
     if isinstance(data, bytes):
         if len(data) > MAX_INPUT_BYTES:
             raise DriftError(f"{name} is too big to be a state file.")
-        data = data.decode("utf-8-sig", errors="replace")
+        # Windows PowerShell 5 writes UTF-16 with a byte order mark when output goes to a
+        # file with >, like terraform state pull > state.json.
+        utf16 = data[:2] in (b"\xff\xfe", b"\xfe\xff")
+        data = data.decode("utf-16" if utf16 else "utf-8-sig", errors="replace")
     text = (data or "").strip()
     if text.startswith("["):
         raise DriftError(f"{name} isn't a Terraform state or plan.")
@@ -356,6 +359,11 @@ def source_kind(data) -> str:
         return "raw"
     if "values" in data or "format_version" in data:
         return "show"
+    if "modules" in data and "version" in data:
+        raise DriftError("That's a version 3 state, from Terraform 0.11 or older. Drift reads "
+                         "states from Terraform 0.12 and newer. Give it the Terraform folder "
+                         "instead, or the output of terraform show -json from Terraform 0.12 or "
+                         "newer.")
     raise DriftError("That JSON isn't a Terraform state or plan. Give a terraform.tfstate "
                      "file, the output of terraform show -json, or plan JSON.")
 
@@ -853,6 +861,10 @@ def _proto(p) -> str:
     return {"all": "-1", "6": "tcp", "17": "udp", "1": "icmp", "58": "icmpv6"}.get(s, s)
 
 
+# The protocols whose rules have ports (or ICMP types and codes).
+PORT_PROTOCOLS = ("tcp", "udp", "icmp", "icmpv6")
+
+
 def _num(v):
     try:
         return int(v)
@@ -864,7 +876,9 @@ def rule_atoms(direction, proto, fp, tp, cidrs=(), prefix_lists=(), groups=()) -
     """One security group rule split into (direction, protocol, from, to, kind, source)
     pieces, one per source. Descriptions are left out on purpose."""
     proto = _proto(proto)
-    if proto == "-1":
+    if proto not in PORT_PROTOCOLS:
+        # All protocols, or one without ports like ESP (50) or GRE (47): AWS ignores the
+        # ports and doesn't return them, while Terraform keeps the 0 to 0 it was given.
         fp = tp = None
     else:
         fp, tp = _num(fp), _num(tp)
@@ -2491,6 +2505,17 @@ def _marks_for(marks, attr):
     return marks.get(attr) if isinstance(marks, dict) else None
 
 
+def _merge_marks(a, b):
+    """Two tag maps' marks as one: a key marked in either is marked."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return {k: True for k in set(a) | set(b) if _has_true(a.get(k)) or _has_true(b.get(k))}
+    if isinstance(a, dict) and not _has_true(b):
+        return a
+    if isinstance(b, dict) and not _has_true(a):
+        return b
+    return _has_true(a) or _has_true(b)
+
+
 def parse_drift(plan) -> list:
     """The resource_drift of a plan (terraform plan -refresh-only, or a normal plan) as
     plain entries with old and new values. Values marked sensitive, or named like a
@@ -2513,12 +2538,21 @@ def parse_drift(plan) -> list:
         bs, as_ = _marks_of(ch.get("before_sensitive")), _marks_of(ch.get("after_sensitive"))
         changes = []
         if action == "update":
-            for attr in tfplan.changed_attrs(ch):
-                attr = attr.split(" ")[0]
-                if attr == "tags_all" and "tags" in before:
-                    continue
-                changes += _attr_changes(rtype, attr, before.get(attr), after.get(attr),
-                                         _marks_for(bs, attr), _marks_for(as_, attr))
+            attrs = [a.split(" ")[0] for a in tfplan.changed_attrs(ch)]
+            # tags_all is tags plus the provider's default_tags, so it's only shown when
+            # tags didn't change: a default tag deleted or changed in the console.
+            if "tags" in attrs:
+                attrs = [a for a in attrs if a != "tags_all"]
+            elif "tags_all" not in attrs and before.get("tags_all") != after.get("tags_all"):
+                attrs.append("tags_all")
+            for attr in attrs:
+                bm, am = _marks_for(bs, attr), _marks_for(as_, attr)
+                if attr in ("tags", "tags_all"):
+                    # Terraform may mark a tag sensitive in only one of the two.
+                    other = "tags" if attr == "tags_all" else "tags_all"
+                    bm = _merge_marks(bm, _marks_for(bs, other))
+                    am = _merge_marks(am, _marks_for(as_, other))
+                changes += _attr_changes(rtype, attr, before.get(attr), after.get(attr), bm, am)
             if not changes:
                 continue
         vals = _Values(before, bs)

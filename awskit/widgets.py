@@ -176,13 +176,21 @@ def string_dropdown(options, selected=0):
 
 
 def flash(btn, text, ms=1200):
-    old = btn.get_label()
+    # A second click while the first flash shows starts the wait again, so the button
+    # goes back to its own label, not to the flash text.
+    pending = getattr(btn, "_awskit_flash", None)
+    if pending:
+        GLib.source_remove(pending[0])
+        old = pending[1]
+    else:
+        old = btn.get_label()
     btn.set_label(text)
 
     def back():
+        btn._awskit_flash = None
         btn.set_label(old)
         return False
-    GLib.timeout_add(ms, back)
+    btn._awskit_flash = (GLib.timeout_add(ms, back), old)
 
 
 # =================================================================== table

@@ -116,6 +116,12 @@ class TerminalTextTests(unittest.TestCase):
         self.assertIn("web?[2K?[1Aserver", text)
         self.assertEqual(common.terminal_safe("line\nnext\ttab"), "line\nnext\ttab")
 
+    def test_markdown_rows_stay_whole(self):
+        rows = [{"name": "a\rb", "tag": "c\r\nd|e\nf"}]
+        text = common.to_markdown(rows, [("name", "Name"), ("tag", "Tag")])
+        self.assertNotIn("\r", text)
+        self.assertEqual(text.splitlines()[-1], "| a b | c d\\|e f |")
+
 
 class TrailRecordTests(unittest.TestCase):
     def test_odd_records_dont_stop_a_search(self):
@@ -155,6 +161,107 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(raw["keep"], ["i-1", "i-2"])
         self.assertIn("secrets_scan", raw)
         self.assertIn("drift", raw)
+
+    def write(self, data: bytes):
+        common.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        common.CONFIG_FILE.write_bytes(data)
+
+    def test_byte_order_mark_and_whole_numbers(self):
+        # Notepad and PowerShell can put a byte order mark first, which used to mean every
+        # setting was ignored. "notify_threshold": 20 (no .0) was ignored too.
+        self.write(b"\xef\xbb\xbf" + json.dumps({"keep": ["i-0abc"], "notify_threshold": 20,
+                                                  "regions": ["us-east-1"]}).encode())
+        cfg = common.load_config()
+        self.assertEqual(cfg["keep"], ["i-0abc"])
+        self.assertEqual(cfg["regions"], ["us-east-1"])
+        self.assertEqual(cfg["notify_threshold"], 20.0)
+        self.assertIsInstance(cfg["notify_threshold"], float)
+        self.write(json.dumps({"notify_threshold": True}).encode())
+        self.assertEqual(common.load_config()["notify_threshold"], 1.0)   # not a number
+
+    def test_a_file_that_cant_be_read_is_kept_before_saving(self):
+        # A typo made by hand used to be wiped by the next save, keep list and all
+        bad = common.CONFIG_FILE.with_name("config.json.bad")
+        self.addCleanup(lambda: bad.exists() and bad.unlink())
+        typo = '{"keep": ["i-0abc", "i-0def",], "regions": ["us-east-1"]}'
+        self.write(typo.encode())
+        cfg = common.load_config()
+        self.assertEqual(cfg["keep"], [])
+        cfg["appearance"] = {"style": "dark"}
+        self.assertTrue(common.save_config(cfg))
+        self.assertEqual(bad.read_text(), typo)
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(bad.stat().st_mode), 0o600)
+        bad.unlink()
+        self.assertTrue(common.save_config(common.load_config()))   # a good file isn't
+        self.assertFalse(bad.exists())
+
+
+class ClipboardTests(unittest.TestCase):
+    def test_wsl_without_windows_programs_copies_through_wslg(self):
+        # With interop turned off in wsl.conf, clip.exe can't run. Reading fell back to
+        # wl-paste, but copying stopped with an error even when wl-copy was there.
+        import subprocess
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd[0])
+            if cmd[0].endswith("clip.exe"):
+                raise OSError(8, "Exec format error")
+            return subprocess.CompletedProcess(cmd, 0)
+        clip = "/mnt/c/Windows/System32/clip.exe"
+        with mock.patch.object(common, "windows_tool", return_value=clip), \
+                mock.patch.object(common.subprocess, "run", side_effect=fake_run):
+            with mock.patch.object(common, "clip_backends", return_value=["windows", "wayland"]):
+                common.write_clipboard("x")
+            self.assertEqual(calls, [clip, "wl-copy"])
+            with mock.patch.object(common, "clip_backends", return_value=["windows"]), \
+                    self.assertRaises(common.ClipboardError):
+                common.write_clipboard("x")
+
+
+class TimeTests(unittest.TestCase):
+    def test_a_date_without_dashes_is_a_message(self):
+        # awskit trail --since 20261001 read it as 20 million hours and ended in a traceback
+        for text in ("20261001", "99999999999999999999w"):
+            with self.subTest(text), self.assertRaises(ValueError) as caught:
+                common.parse_when(text)
+            self.assertIn("Use 2h, 3d, or 2026-10-01 14:30", str(caught.exception))
+        self.assertLess(abs((common.parse_when("2h") - common.parse_when("120m")).total_seconds()), 5)
+
+
+class FlashTests(unittest.TestCase):
+    def test_second_click_goes_back_to_the_buttons_own_label(self):
+        # Two quick clicks on Copy used to leave the button saying Copied for good
+        try:
+            from gi.repository import GLib
+            from awskit import widgets
+        except (ImportError, ValueError):
+            self.skipTest("GTK 4 for Python isn't installed")
+
+        class Button:
+            label = "Copy"
+
+            def get_label(self):
+                return self.label
+
+            def set_label(self, text):
+                self.label = text
+
+        def spin(seconds):
+            ctx = GLib.MainContext.default()
+            end = time.time() + seconds
+            while time.time() < end:
+                ctx.iteration(False)
+                time.sleep(0.005)
+
+        b = Button()
+        widgets.flash(b, "Copied", 100)
+        spin(0.03)
+        widgets.flash(b, "Copied", 100)
+        self.assertEqual(b.label, "Copied")
+        spin(0.4)
+        self.assertEqual(b.label, "Copy")
 
 
 if __name__ == "__main__":

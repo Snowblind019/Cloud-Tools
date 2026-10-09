@@ -919,15 +919,20 @@ def read_json_file(path) -> object:
     if len(raw) > MAX_INPUT_BYTES:
         raise ScpError(f"{p.name} is over 64 MB, bigger than any state or snapshot this "
                        "reads.")
-    if raw.lstrip()[:1] != b"{":
+    try:
+        # UTF-8, or UTF-8 or UTF-16 with a byte order mark (Notepad, PowerShell's > and Out-File)
+        text = iampolicy.json_text(raw)
+    except UnicodeDecodeError as exc:
+        raise ScpError(f"{p.name} isn't valid JSON: {exc}") from exc
+    if text is None:
         raise ScpError(f"{p.name} isn't JSON. Open a snapshot, a .tfstate file or the output of "
                        "terraform show -json. A saved binary plan needs terraform show -json "
                        "first.")
     try:
-        return json.loads(raw.decode("utf-8-sig"))
+        return json.loads(text)
     except RecursionError:
         raise ScpError(f"{p.name} is nested too deeply to be a state or a snapshot.") from None
-    except (ValueError, UnicodeDecodeError) as exc:
+    except ValueError as exc:
         raise ScpError(f"{p.name} isn't valid JSON: {exc}") from exc
 
 
@@ -2115,7 +2120,7 @@ def cmd_scp(args) -> int:
         account = org.find(args.account, ("account",))
         if args.draft:
             try:
-                text = Path(args.draft).expanduser().read_text(encoding="utf-8")
+                text = iampolicy.decode_text(Path(args.draft).expanduser().read_bytes())
             except (OSError, UnicodeDecodeError) as exc:
                 raise ScpError(f"Couldn't read the draft: {exc}") from exc
             draft = make_draft(text, args.attach or account.id, org)

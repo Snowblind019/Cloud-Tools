@@ -208,6 +208,25 @@ class MappingTests(unittest.TestCase):
         self.assertIn(("s3:PutObject", {"arn:aws:s3:::dest-bucket/*"}), m.uses)
         self.assertIn(("s3:GetObject", {"arn:aws:s3:::src-bucket/*"}), m.uses)
 
+    def test_calls_for_one_version_of_an_object_need_the_version_actions(self):
+        # s3:GetObject doesn't allow GetObject with a versionId; s3:GetObjectVersion does.
+        version = {"bucketName": "site", "key": "a.txt", "versionId": "3HL4kqtJlcpXroDTDmJ"}
+        for name, action in (("GetObject", "s3:GetObjectVersion"),
+                             ("HeadObject", "s3:GetObjectVersion"),
+                             ("DeleteObject", "s3:DeleteObjectVersion"),
+                             ("GetObjectAcl", "s3:GetObjectVersionAcl"),
+                             ("PutObjectTagging", "s3:PutObjectVersionTagging")):
+            with self.subTest(name=name):
+                self.assertEqual(self.mapped("s3", name, version).uses,
+                                 [(action, {"arn:aws:s3:::site/*"})])
+        plain = self.mapped("s3", "GetObject", {"bucketName": "site", "key": "a.txt"})
+        self.assertEqual(plain.uses, [("s3:GetObject", {"arn:aws:s3:::site/*"})])
+        m = self.mapped("s3", "CopyObject", {"bucketName": "dest-bucket",
+                                             "x-amz-copy-source": "src-bucket/a%3Fb.txt"
+                                                                  "?versionId=xyz"})
+        self.assertIn(("s3:GetObjectVersion", {"arn:aws:s3:::src-bucket/*"}), m.uses)
+        self.assertNotIn("s3:GetObject", [a for a, _ in m.uses])
+
     def test_unknown_service_and_unmappable_calls_are_listed_not_guessed(self):
         records = [rec("madeup", "DoThing"), rec("apigateway", "GetRestApis"),
                    rec("dynamodb", "TransactWriteItems", {"transactItems": []}),
@@ -458,6 +477,16 @@ class ResourceTests(unittest.TestCase):
         self.assertEqual(self.res("ssm", "StartSession", {"target": "i-0abc1234def567890"}),
                          {f"arn:aws:ec2:us-east-1:{ACCOUNT}:instance/i-0abc1234def567890",
                           f"arn:aws:ssm:us-east-1:{ACCOUNT}:document/SSM-SessionManagerRunShell"})
+
+    def test_ssm_version_or_label_isnt_part_of_the_arn(self):
+        # GetParameter "name:3" reads version 3, but IAM checks the parameter's own ARN.
+        p = f"arn:aws:ssm:us-east-1:{ACCOUNT}:parameter"
+        self.assertEqual(self.res("ssm", "GetParameter", {"name": "/app/db-host:3"}),
+                         {p + "/app/db-host"})
+        self.assertEqual(self.res("ssm", "GetParameters", {"names": ["/a:prod", "b"]}),
+                         {p + "/a", p + "/b"})
+        self.assertEqual(self.res("ssm", "GetParameter", {"name": p + "/app/key:7"}),
+                         {p + "/app/key"})
 
     def test_logs(self):
         g = f"arn:aws:logs:us-east-1:{ACCOUNT}:log-group:/aws/lambda/api:*"
@@ -930,12 +959,22 @@ class FileTests(unittest.TestCase):
 
     def test_nothing_readable(self):
         bad = self.dir / "bad.json"
-        bad.write_bytes(b"\xff\xfe\x00garbage")
+        bad.write_bytes(b"\x80\x81\x00garbage")
         with self.assertRaises(lp.LeastPrivError) as cm:
             lp.run(who=ROLE, files=[str(bad)])
         self.assertIn("isn't UTF-8", str(cm.exception))
         with self.assertRaises(lp.LeastPrivError):
             lp.run(who=ROLE, files=[str(self.dir / "missing.json")])
+
+    def test_utf16_from_windows_powershell(self):
+        # Windows PowerShell 5 writes aws cloudtrail lookup-events > events.json as UTF-16.
+        base = lp.run(who=ROLE, files=[str(SAMPLE)]).text
+        for enc in ("utf-16", "utf-16-be"):
+            with self.subTest(enc=enc):
+                f = self.dir / f"events-{enc}.json"
+                data = json.dumps(self.lookup_output()).encode(enc)
+                f.write_bytes(data if enc == "utf-16" else b"\xfe\xff" + data)
+                self.assertEqual(lp.run(who=ROLE, files=[str(f)]).text, base)
 
     def test_principal_picked_from_files_when_there_is_one(self):
         only = self.dir / "only.json"
@@ -1580,6 +1619,199 @@ class CliTests(unittest.TestCase):
         for flag in ("--days", "--thorough", "--files", "--no-resources", "--include-denied",
                      "--json", "-o", "--region", "--profile"):
             self.assertIn(flag, text)
+
+
+# ------------------------------------------------------------------ the page
+
+PAGE_CHECK = r"""
+import json, os, sys, time
+TMP = sys.argv[1]
+os.environ.update({"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing",
+                   "AWS_SESSION_TOKEN": "testing", "AWS_DEFAULT_REGION": "us-east-1",
+                   "XDG_CONFIG_HOME": TMP, "AWS_CONFIG_FILE": os.path.join(TMP, "aws-config"),
+                   "AWS_SHARED_CREDENTIALS_FILE": os.path.join(TMP, "aws-credentials")})
+for name in [n for n in os.environ if n.startswith("AWS_ENDPOINT_URL") or n in (
+        "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_CA_BUNDLE", "AWS_ROLE_ARN")]:
+    os.environ.pop(name, None)
+sys.path.insert(0, sys.argv[2])
+SAMPLE, PASSROLES = sys.argv[3], sys.argv[4]
+import boto3
+from moto import mock_aws
+mock = mock_aws()
+mock.start()
+iam = boto3.client("iam")
+iam.create_role(RoleName="lab-deployer", AssumeRolePolicyDocument="{}")
+iam.create_role(RoleName="ci-runner", Path="/ci/", AssumeRolePolicyDocument="{}")
+
+import gi
+gi.require_version("Gtk", "4.0")
+from gi.repository import GLib, Gtk
+from awskit import appearance, leastpriv as lp
+from awskit.app import App
+
+
+class Missing:
+    # Gtk.ListBox.remove_all is new in GTK 4.12; the page has to work without it.
+    def __get__(self, obj, cls):
+        raise AttributeError("remove_all")
+
+
+Gtk.ListBox.remove_all = Missing()
+real_run = lp.run
+
+
+def slow_run(profile, who, days, regions, thorough, files, compare, **kw):
+    time.sleep(1.5 if who == "first-role" else 0.1)
+    res = real_run(None, "lab-deployer", files=[SAMPLE], compare=False)
+    res.principal.name = who
+    return res
+
+
+app = App(page="leastpriv")
+out = {}
+
+
+def page():
+    return app.get_active_window().pages["leastpriv"]
+
+
+def roles_shown(p):
+    names, row = [], p.role_list.get_first_child()
+    while row is not None:
+        names.append(row.role["name"])
+        row = row.get_next_sibling()
+    return names
+
+
+def wait(cond, then):
+    tries = [0]
+
+    def check():
+        tries[0] += 1
+        if cond() or tries[0] > 100:
+            guarded(then)
+            return False
+        return True
+    GLib.timeout_add(100, check)
+
+
+def guarded(fn):
+    try:
+        fn()
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        print(json.dumps({"error": repr(exc), "out": out}), flush=True)
+        app.quit()
+
+
+def start():
+    p = page()
+    out["profile"] = p.win.profile
+    p.load_roles()                # no profile: the default credential chain
+    wait(lambda: roles_shown(p), roles_loaded)
+
+
+def roles_loaded():
+    p = page()
+    out["roles"] = roles_shown(p)
+    p.profile_changed(None)
+    out["after_profile_change"] = roles_shown(p)
+    p._fill_roles([{"name": "x", "arn": "arn:aws:iam::111111111111:role/x", "path": "/"}])
+    p._fill_roles([{"name": "y", "arn": "arn:aws:iam::111111111111:role/y", "path": "/"}])
+    out["refilled"] = roles_shown(p)
+
+    # Two roles passed to two services: each row highlights its own statement.
+    p.show_result(real_run(None, "lab-deployer", files=[PASSROLES], compare=False))
+    out["passrole"] = {}
+    for it in p.table.items():
+        if it.data["full"] == "iam:PassRole":
+            p.selected(it)
+            out["passrole"][it.data["source"]] = p._highlighted
+
+    # A theme change recolors the highlight.
+    appearance.apply({"style": "dark", "colors": "default", "accent": "orange",
+                      "text_size": 100})
+    want = Gdk.RGBA()
+    want.parse(appearance.current_accent())
+    got = p.hl_tag.get_property("foreground-rgba")
+    out["accent_followed"] = [round(got.red, 2), round(got.green, 2), round(got.blue, 2)] == \
+        [round(want.red, 2), round(want.green, 2), round(want.blue, 2)]
+
+    # A second build while the first is still running: the first one's result is dropped.
+    lp.run = slow_run
+    p.files = []
+    p.who.set_text("first-role")
+    p.who.emit("activate")
+    first = p.cancel
+    p.who.set_text("second-role")
+    p.who.emit("activate")
+    out["first_stopped"] = first.is_set()
+    GLib.timeout_add(2500, lambda: guarded(builds_done) or False)
+
+
+def builds_done():
+    p = page()
+    out["shown"] = p.result.principal.name
+    out["entry"] = p.who.get_text()
+    out["button"] = p.build_btn.get_sensitive()
+    print(json.dumps(out), flush=True)
+    app.quit()
+
+
+from gi.repository import Gdk  # noqa: E402
+app.connect("activate", lambda a: GLib.timeout_add(500, lambda: guarded(start) or False))
+app.run([sys.argv[0]])
+"""
+
+
+class LeastPrivPageTests(unittest.TestCase):
+    """The Least Privilege page itself, in a real GTK window under xvfb-run."""
+
+    def test_page_flow(self):
+        import shutil
+        import subprocess
+        try:
+            import gi
+            gi.require_version("Gtk", "4.0")
+        except (ImportError, ValueError):
+            self.skipTest("GTK 4 for Python isn't installed")
+        if mock_aws is None:
+            self.skipTest("moto isn't installed")
+        folder = Path(tempfile.mkdtemp(prefix="lp-page-", dir=TMP))
+        (folder / "check.py").write_text(PAGE_CHECK, encoding="utf-8")
+        passroles = folder / "passroles.json"
+        passroles.write_text(json.dumps({"Records": [
+            rec("lambda", "CreateFunction20150331", {
+                "functionName": "api", "role": f"arn:aws:iam::{ACCOUNT}:role/api-role"}),
+            rec("ecs", "RegisterTaskDefinition", {
+                "family": "web", "taskRoleArn": f"arn:aws:iam::{ACCOUNT}:role/task-role"})]}))
+        cmd = [sys.executable, str(folder / "check.py"), str(folder), str(ROOT), str(SAMPLE),
+               str(passroles)]
+        if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+            if not shutil.which("xvfb-run"):
+                self.skipTest("no display and no xvfb-run")
+            cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24"] + cmd
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        lines = [x for x in r.stdout.splitlines() if x.startswith("{")]
+        self.assertTrue(lines, r.stdout[-2000:] + r.stderr[-2000:])
+        got = json.loads(lines[-1])
+        self.assertNotIn("error", got, r.stderr[-2000:])
+        # The role picker lists roles for the default credential chain (no profile) too.
+        self.assertIsNone(got["profile"])
+        self.assertEqual(got["roles"], ["ci-runner", "lab-deployer"])
+        # Switching profiles and refilling the list work without ListBox.remove_all.
+        self.assertEqual(got["after_profile_change"], [])
+        self.assertEqual(got["refilled"], ["y"])
+        self.assertEqual(got["passrole"], {
+            "Needed by lambda:CreateFunction": "IAMPassRoleToLambda",
+            "Needed by ecs:RegisterTaskDefinition": "IAMPassRoleToEcsTasks"})
+        self.assertTrue(got["accent_followed"])
+        self.assertTrue(got["first_stopped"])
+        self.assertEqual((got["shown"], got["entry"]), ("second-role", "second-role"))
+        self.assertTrue(got["button"])
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("CRITICAL", r.stderr)
 
 
 if __name__ == "__main__":

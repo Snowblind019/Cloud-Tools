@@ -200,6 +200,26 @@ class SystemTests(unittest.TestCase):
         finally:
             appearance._State.initial_dark = None
 
+    def test_wsl_finds_reg_exe_where_windows_is_mounted(self):
+        # reg.exe was only looked for in /mnt/c, so with Windows' drive mounted somewhere
+        # else (automount root in wsl.conf) Follow system never followed Windows
+        try:
+            from awskit import appearance
+        except (ImportError, ValueError):
+            self.skipTest("GTK 4 for Python isn't installed")
+        from unittest import mock
+        reg = "/win/c/Windows/System32/reg.exe"
+        answer = subprocess.CompletedProcess([], 0, stdout=(
+            "\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\n"
+            "    AppsUseLightTheme    REG_DWORD    0x0\n\n"), stderr="")
+        with mock.patch.object(appearance, "windows_tool",
+                               lambda name: reg if name == "reg.exe" else None), \
+                mock.patch.object(appearance.subprocess, "run", return_value=answer) as run:
+            self.assertTrue(appearance._wsl_dark())
+        self.assertEqual(run.call_args[0][0][0], reg)
+        with mock.patch.object(appearance, "windows_tool", lambda name: None):
+            self.assertIsNone(appearance._wsl_dark())
+
     def test_a_bad_config_still_opens(self):
         try:
             from awskit import appearance
@@ -346,15 +366,42 @@ a.run([])
 '''
 
 
+TEXT_SIZE_CHECK = r'''
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+os.environ["XDG_CONFIG_HOME"] = sys.argv[2]
+import gi
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gtk
+from awskit import appearance
+
+def labels(dd):
+    m = dd.get_model()
+    return [m.get_string(i) for i in range(m.get_n_items())]
+
+out = {}
+appearance.save_settings({"style": "light", "colors": "default", "accent": "default",
+                          "text_size": 120})
+w = appearance.AppearanceWindow()
+dd = w.size_dd
+out["shown"] = labels(dd)[dd.get_selected()]
+dd.set_selected(1)                                    # picks Normal (100%)
+out["saved"] = appearance.load_settings()["text_size"]
+out["after"] = [labels(dd)[dd.get_selected()], len(labels(dd))]
+w.close()
+print(json.dumps(out))
+'''
+
+
 class WindowTests(unittest.TestCase):
-    def test_apply_window_and_other_processes(self):
+    def run_gtk(self, script):
         try:
             import gi
             gi.require_version("Gtk", "4.0")
         except (ImportError, ValueError):
             self.skipTest("GTK 4 for Python isn't installed")
         folder = Path(tempfile.mkdtemp(prefix="look-", dir=TMP))
-        (folder / "check.py").write_text(GTK_CHECK, encoding="utf-8")
+        (folder / "check.py").write_text(script, encoding="utf-8")
         cmd = [sys.executable, str(folder / "check.py"), str(ROOT), str(folder)]
         if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
             if not shutil.which("xvfb-run"):
@@ -363,7 +410,18 @@ class WindowTests(unittest.TestCase):
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         lines = [x for x in r.stdout.splitlines() if x.startswith("{")]
         self.assertTrue(lines, r.stdout[-2000:] + r.stderr[-2000:])
-        got = json.loads(lines[-1])
+        return json.loads(lines[-1])
+
+    def test_a_text_size_between_the_usual_ones(self):
+        # awskit appearance --text-size 120 showed as Normal (100%) in the window, so
+        # picking Normal there changed nothing
+        got = self.run_gtk(TEXT_SIZE_CHECK)
+        self.assertEqual(got["shown"], "Custom (120%)")
+        self.assertEqual(got["saved"], 100)
+        self.assertEqual(got["after"], ["Normal (100%)", len(theme.TEXT_SIZES)])
+
+    def test_apply_window_and_other_processes(self):
+        got = self.run_gtk(GTK_CHECK)
         self.assertNotIn("error", got)
         self.assertEqual(got["variant"], "dark")
         self.assertTrue(got["has_provider"])

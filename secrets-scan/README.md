@@ -71,7 +71,7 @@ Choosing a subfolder or a file inside a repo limits the scan to that part of it.
 
 1. Press **Folder** and pick a repo or folder. It remembers the last one.
 2. Pick **What to scan**. For **Git history**, set how many commits to read.
-3. Press **Scan**. The counts at the top show how many findings need fixing and how many are warnings.
+3. Press **Scan**. The counts at the top show how many findings need fixing and how many are warnings. Picking another folder while a scan runs stops that scan.
 4. Click a finding to see the lines around it, with every secret in them masked, and how to fix it. **Copy** copies that text, masks included.
 5. If it's a false positive, press **Allow this**. It adds the value's sha256 (never the value) to `.awskit-secrets-allow` at the top of the repo, and the finding goes away along with every other copy of the same value. Commit that file so the hook and CI skip it too.
 6. **Install commit hook** adds the hook to the repo. The label next to it says whether it's on, off, or whether another tool's hook is already there.

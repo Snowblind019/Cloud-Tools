@@ -416,6 +416,31 @@ def parse_rules(text) -> list:
     return out
 
 
+# The characters AWS takes in a security group's description and a rule's description. Any
+# other character (an apostrophe, an accented letter, a dash like –) passes terraform
+# validate and plan, then fails at apply.
+AWS_TEXT_CHARS = r"A-Za-z0-9 ._\-:/()#,@\[\]+=&;{}!$*"
+AWS_TEXT_MAX = 255
+
+
+def _aws_text_problem(text) -> str:
+    """Why AWS would refuse text as a description, or "" when it's fine."""
+    text = str(text or "")
+    bad = sorted(set(re.sub(f"[{AWS_TEXT_CHARS}]", "", text)))
+    if bad:
+        shown = " ".join(ch if ch.isprintable() else f"U+{ord(ch):04X}" for ch in bad)
+        return (f"AWS doesn't allow {shown} in it. Use letters, numbers, spaces and "
+                "._-:/()#,@[]+=&;{}!$*")
+    if len(text) > AWS_TEXT_MAX:
+        return f"it's {len(text)} characters long, and AWS allows up to {AWS_TEXT_MAX}"
+    return ""
+
+
+def _aws_text(text) -> str:
+    """text with the characters AWS refuses in a description left out."""
+    return " ".join(re.sub(f"[^{AWS_TEXT_CHARS}]", "", str(text or "")).split())[:AWS_TEXT_MAX]
+
+
 def _bool(value) -> bool:
     return str(value).strip().lower() in ("true", "1", "yes", "on")
 
@@ -663,8 +688,11 @@ def analyze(design, region=None):
         # ---- security groups
         sgs = design.in_vpc(vpc.id, "sg")
         for g in sgs:
+            why = _aws_text_problem(g.get("description"))
+            if why:
+                err(g, f"{g.title()}: the description won't work, {why}.")
             m["security_groups"][g.name] = {"description": g.get("description") or
-                                            f"{g.name}, from the {design.name} design"}
+                                            _aws_text(f"{g.name}, from the {design.name} design")}
             for direction in ("ingress", "egress"):
                 try:
                     rules = parse_rules(g.get(direction))
@@ -672,6 +700,10 @@ def analyze(design, region=None):
                     err(g, f"{g.title()}, {direction}: {exc}.")
                     continue
                 for rule in rules:
+                    why = _aws_text_problem(rule.description)
+                    if why:
+                        err(g, f"{g.title()}, {direction}: the description of {rule.ports_text()} "
+                               f"{rule.cidr} won't work, {why}.")
                     key = _rule_key(g.name, rule, direction)
                     target = m["ingress_rules" if direction == "ingress" else "egress_rules"]
                     new = _rule_dict(g.name, rule)
@@ -777,6 +809,11 @@ def analyze(design, region=None):
             p, lo, hi = parse_ports(proto, ports)
         except ValueError as exc:
             err(a, f"The arrow from {src.title(True)} to {dst.title(True)}: {exc}.")
+            continue
+        why = _aws_text_problem(a.get("description"))
+        if why:
+            err(a, f"The arrow from {src.title(True)} to {dst.title(True)}: the description "
+                   f"won't work, {why}.")
             continue
         m = out.get(vpc_name.get(dst.vpc, ""))
         if m is None:

@@ -90,6 +90,8 @@ class AuditPage(Page):
 
     def done(self, result):
         self.findings, warnings = result
+        # Stop leaves checks that never ran, so say so rather than look clean
+        stopped = self.cancel.is_set()
         self.run_btn.set_sensitive(True)
         rows = []
         for f in self.findings:
@@ -98,12 +100,16 @@ class AuditPage(Page):
             rows.append(r)
         self.table.set_rows(rows, self.findings)
         if not self.findings:
-            self.table.clear("No findings. Either it's in good shape or the checks lacked "
+            self.table.clear("Stopped before the checks finished. Run the audit again for the "
+                             "whole picture." if stopped else
+                             "No findings. Either it's in good shape or the checks lacked "
                              "permission, see the notes below.")
-        self.show_counts()
+        self.show_counts(stopped)
         self.apply_level()
         # Notes are what couldn't be checked, so point them out. Clear old ones otherwise.
-        self.status.idle(f"Audit finished at {datetime.now():%H:%M}." +
+        self.status.idle((f"Audit stopped early at {datetime.now():%H:%M}, so some checks "
+                          "didn't run." if stopped else
+                          f"Audit finished at {datetime.now():%H:%M}.") +
                          (f" {len(warnings)} note(s) on what couldn't be checked, below."
                           if warnings else ""))
         self.detail.set_text("Notes from the audit:\n\n" + "\n".join(warnings) if warnings else "")
@@ -113,11 +119,12 @@ class AuditPage(Page):
         self.status.idle("")
         show_message(self.win, "Audit failed", error_text(exc))
 
-    def show_counts(self):
+    def show_counts(self, stopped=False):
         clear_box(self.counts_box)
         c = audit.counts(self.findings)
         if not self.findings:
-            self.counts_box.append(label("No findings.", "headline"))
+            self.counts_box.append(label("Stopped early." if stopped else "No findings.",
+                                         "headline"))
             return
         for sev, n in c.items():
             if n:

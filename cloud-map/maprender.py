@@ -1179,12 +1179,21 @@ def _surface_size(scene, scale):
     return max(1, int(math.ceil(scene.width * scale))), max(1, int(math.ceil(scene.height * scale)))
 
 
+def _with_icons(scene):
+    """A file gets the real icons. The viewer may be loading them in the background
+    right now, and until that's done they come back missing (the viewer draws stand-ins
+    meanwhile), so wait for it."""
+    if scene.icons is not None:
+        scene.icons.load()
+    return scene
+
+
 def render_png(layout, theme_name="dark", scale=2.0, icons=None, problems=None) -> bytes:
     """The whole map as PNG bytes, at scale times the draw.io page size."""
     import io
 
     import cairo
-    scene = Scene(layout, theme_name, icons, problems)
+    scene = _with_icons(Scene(layout, theme_name, icons, problems))
     scale = png_scale(scene, scale)
     w, h = _surface_size(scene, scale)
     surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
@@ -1203,7 +1212,7 @@ def render_svg(layout, theme_name="dark", icons=None, problems=None) -> bytes:
     import io
 
     import cairo
-    scene = Scene(layout, theme_name, icons, problems)
+    scene = _with_icons(Scene(layout, theme_name, icons, problems))
     buf = io.BytesIO()
     surf = cairo.SVGSurface(buf, scene.width, scene.height)
     try:
@@ -1224,7 +1233,7 @@ def render_image(layout, theme_name="dark", width=None, height=None, icons=None)
     """A cairo ImageSurface of the whole map, scaled to fit width x height. For tests and
     thumbnails."""
     import cairo
-    scene = Scene(layout, theme_name, icons)
+    scene = _with_icons(Scene(layout, theme_name, icons))
     scale = 1.0
     if width and height:
         scale = min(width / scene.width, height / scene.height)

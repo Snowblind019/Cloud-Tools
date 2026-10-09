@@ -130,7 +130,7 @@ The editor opens right inside the page. The controls and details step aside to g
 
 ![The Cloud Map page editing the network map in draw.io: the load balancer moved, the database recolored, and a note with an arrow drawn by hand](docs/editor-embedded.png)
 
-**Done** saves and goes back to the map, which redraws with the new layout. **Cancel** closes it without saving, after asking if something changed. draw.io's own **Save**, **Save & Exit** and **Exit** buttons work too: Save keeps the layout and stays in the editor, and Save & Exit is the same as Done.
+**Done** saves and goes back to the map, which redraws with the new layout. **Cancel** closes it without saving, after asking if something changed. Closing AWS Kit while something isn't saved asks first too. draw.io's own **Save**, **Save & Exit** and **Exit** buttons work too: Save keeps the layout and stays in the editor, and Save & Exit is the same as Done.
 
 ![Back on the map after Done: the load balancer where it was put, the database in its new color, and the note and arrow drawn on the map](docs/layout-kept.png)
 
@@ -152,7 +152,7 @@ GTK for Windows (the gvsbuild bundle AWS Kit installs) doesn't include WebKitGTK
 
 (This screenshot was taken on Linux, set to show what Windows shows.)
 
-The button opens the same offline editor in an **Edge app window**: `msedge --app=...`, which looks like its own window with no browser bars, and uses a separate Edge profile in `%LOCALAPPDATA%\AWSKit\edge-profile` with no extensions or sync. Edge comes with Windows 10 and 11, needs no admin and nothing extra, and is found through the App Paths registry key or its usual folders. Saves come straight back to AWS Kit, and the map redraws. Close the window when you're done; Save & Exit also brings the page back to the map.
+The button opens the same offline editor in an **Edge app window**: `msedge --app=...`, which looks like its own window with no browser bars, and uses a separate Edge profile in `%LOCALAPPDATA%\AWSKit\edge-profile` with no extensions or sync. Edge comes with Windows 10 and 11, needs no admin and nothing extra, and is found through the App Paths registry key or its usual folders. Saves come straight back to AWS Kit, and the map redraws. Close the window when you're done; Save & Exit also brings the page back to the map. If the editor is open in two windows, closing one leaves the other able to save.
 
 The dropdown next to the button picks what it uses, and the page remembers it:
 
@@ -263,6 +263,7 @@ Route tables aren't drawn. They follow from the subnets: public subnets share on
 | NAT gateways sit in public subnets, and private subnets have a NAT gateway to route through when the VPC has any | error |
 | A public subnet needs an internet gateway on its VPC, and a VPC has at most one | error |
 | Security group rules are valid, and arrows connect two security groups in the same VPC | error |
+| Security group and rule descriptions only use what AWS takes: letters, numbers, spaces and `._-:/()#,@[]+=&;{}!$*`, up to 255 characters. Anything else would pass `terraform validate` and plan, then fail at apply | error |
 | Names are set, unique, and safe as Terraform keys (letters, numbers, `-` and `_`, starting with a letter) | error |
 | `0.0.0.0/0` or `::/0` on a risky port or all traffic (the same list as [Exposure Audit](../exposure-audit/)) | warning |
 | One NAT gateway shared by several zones | warning |
@@ -387,6 +388,7 @@ It never says reachable when a step couldn't be checked. Errors, like a name tha
 - Transit gateway route tables, and the network ACLs on a transit gateway's attachment subnets
 - What's in a prefix list (`pl-...`), in a security group rule or a route
 - Anything past a virtual private gateway: VPN, Direct Connect and on-premises networks
+- Anything past a Cloud WAN core network: a route to one is unknown
 - Firewalls inside the instance (iptables, Windows Firewall), and whether anything is listening on the port
 - NAT gateway and load balancer target health. From the internet to a load balancer is one check, and from the load balancer to its targets is another
 - AWS Network Firewall, Gateway Load Balancer and other appliances: a route through one is unknown
@@ -650,11 +652,11 @@ How it reads things:
 
 `awskit map tf` reads the same things from Terraform and builds the same model, so a map from Terraform and a map from a scan of what it built use the same IDs and look the same.
 
-- **Inputs:** `terraform show -json` output for a state or a plan, a raw `.tfstate` (like from `terraform state pull`), a saved plan (it runs `terraform show -json` on it), or a folder. For a folder it runs `terraform show -json` to read the current state, or `terraform plan` to a temp file with `--plan`. It uses Plan Check's helpers, so `terraform` and `tofu` both work. It never runs apply.
-- **Modules:** it walks the root module and every child module.
+- **Inputs:** `terraform show -json` output for a state or a plan, a raw `.tfstate` (like from `terraform state pull`), a saved plan (it runs `terraform show -json` on it), or a folder. For a folder it runs `terraform show -json` to read the current state, or `terraform plan` to a temp file with `--plan`. It uses Plan Check's helpers, so `terraform` and `tofu` both work. It never runs apply. JSON saved on Windows is read too, with a byte order mark or as UTF-16 (what PowerShell 5.1's `>` writes). The snapshot is named after the first input, or the folder's own name for `awskit map tf .`.
+- **Modules:** it walks the root module and every child module. In a module called with `count` or `for_each`, references like `aws_vpc.this.id` lead to the same module instance's resources.
 - **IDs:** the real ID from the state when there is one (an ARN for roles, providers, trails, permission sets, buckets, load balancers and databases), otherwise the Terraform address, like `module.network.aws_vpc.main`.
 - **Accounts and regions:** from the resource's ARN when it has one, then the provider settings in a plan (`region`, `allowed_account_ids` or an `assume_role` ARN), then `data.aws_caller_identity` and `data.aws_region`, then the other resources in the same module. Anything still unknown goes in an **Unknown account** box.
-- **Not known yet:** values that come from apply show as `(known after apply)` in captions. Links between new resources, like a new subnet in a new VPC, come from the plan's configuration references. That includes `for_each` references like `aws_subnet.this[each.value.subnet]`, worked out per instance when the `for_each` values are constants or variables, the way the designer writes them.
+- **Not known yet:** values that come from apply show as `(known after apply)` in captions. Links between new resources, like a new subnet in a new VPC, come from the plan's configuration references. That includes `for_each` references like `aws_subnet.this[each.value.subnet]`, worked out per instance when the `for_each` values are constants or variables, the way the designer writes them. An inline route whose gateway is new in the same plan gets that gateway from what the route blocks refer to, and stays `(known after apply)` when that can't be told, so it's never dropped. An `aws_default_route_table` for a new VPC is placed in it the same way.
 - **Break-glass:** an `aws_organizations_account` with `role_name` gets that role drawn in the new account.
 - **Not drawn:** types Cloud Map doesn't map are counted and listed in the warnings and footnote, like `Not drawn from Terraform: 1 aws_eip`.
 

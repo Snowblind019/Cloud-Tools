@@ -679,6 +679,36 @@ class DriftTerraformTests(unittest.TestCase):
         self.assertEqual(db["instance_class"]["aws"], "db.t3.small")
         self.assertEqual(entries[3]["action"], "delete")
 
+    def test_refresh_shows_default_tags_changed_in_the_console(self):
+        # A provider default_tags tag deleted in the console only changes tags_all, since
+        # tags leaves the default tags out.
+        plan = {"resource_drift": [{
+            "address": "aws_vpc.main", "mode": "managed", "type": "aws_vpc", "name": "main",
+            "change": {"actions": ["update"],
+                       "before": {"id": self.vpc, "tags": {"Name": "lab"},
+                                  "tags_all": {"Name": "lab", "Env": "lab", "Owner": SECRET_TAG}},
+                       "after": {"id": self.vpc, "tags": {"Name": "lab"},
+                                 "tags_all": {"Name": "lab", "Owner": SECRET_TAG_NEW}},
+                       # Marked in tags only: it's hidden in tags_all too.
+                       "before_sensitive": {"tags": {"Owner": True}, "tags_all": {}},
+                       "after_sensitive": {"tags": {"Owner": True}, "tags_all": {}}}}]}
+        entries = drift.parse_drift(plan)
+        self.assertEqual([e["address"] for e in entries], ["aws_vpc.main"])
+        changes = {c["setting"]: c for c in entries[0]["changes"]}
+        self.assertEqual(changes["tag Env"], {"setting": "tag Env", "state": "lab",
+                                              "aws": drift.NOT_SET})
+        self.assertEqual((changes["tag Owner"]["state"], changes["tag Owner"]["aws"]),
+                         (drift.HIDDEN, drift.HIDDEN))
+        for secret in SECRETS:
+            self.assertNotIn(secret, json.dumps(entries))
+        # When tags changed as well, tags says it and tags_all isn't repeated.
+        ch = plan["resource_drift"][0]["change"]
+        ch["after"]["tags"] = {"Name": "lab", "Team": "web"}
+        ch["after"]["tags_all"] = {"Name": "lab", "Env": "lab", "Team": "web",
+                                   "Owner": SECRET_TAG}
+        settings = [c["setting"] for c in drift.parse_drift(plan)[0]["changes"]]
+        self.assertEqual(settings, ["tag Team"])
+
     def test_folder_source_and_exact_check(self):
         calls = []
 
@@ -839,6 +869,46 @@ def compared():
     out["hidden"] = p.report.hidden
     p.remove_source(p.sources[0])
     out["after_remove"] = p.headline.get_text()
+    # The state is removed while Compare is still reading: that read isn't shown.
+    p.add_file(good)
+    wait(lambda: page().sources, compare_then_remove, [0])
+
+
+def compare_then_remove():
+    p = page()
+    p.compare()
+    p.remove_source(p.sources[0])
+    wait(lambda: page().compare_btn.get_sensitive(), removed_while_reading, [0])
+
+
+def removed_while_reading():
+    p = page()
+    out["removed_while_reading"] = [p.headline.get_text(), len(p.table.visible_items()),
+                                    p.report is None]
+    # The folder is removed while its exact check runs: the page doesn't stay busy.
+    import time
+    from awskit import drift
+
+    def slow_exact(path, profile=None, log=None):
+        time.sleep(0.5)
+        return []
+    drift.exact_check = slow_exact
+    folder = os.path.join(TMP, "net")
+    os.makedirs(folder, exist_ok=True)
+    p.sources.append({"path": folder, "kind": "folder", "stack": drift.build_stack(
+        {"format_version": "1.0", "values": {}}, "net", folder, "folder")})
+    p.show_chips()
+    out["messages_before"] = len(messages)
+    p.inventory = None              # an exact check before any Compare
+    p._run_exact(list(p.sources))
+    p.remove_source(p.sources[0])
+    wait(lambda: page().compare_btn.get_sensitive(), exact_removed, [0])
+
+
+def exact_removed():
+    p = page()
+    out["exact_removed"] = [p.compare_btn.get_sensitive(), p.status.text.get_text(),
+                            messages[out.pop("messages_before"):], p.headline.get_text()]
     print(json.dumps(out), flush=True)
     app.quit()
 
@@ -884,10 +954,62 @@ class DriftPageTests(unittest.TestCase):
         self.assertEqual(got["after_ignore"], ["deleted-bucket"])
         self.assertEqual(got["hidden"], 1)
         self.assertEqual(got["after_remove"], "No comparison yet.")
+        self.assertEqual(got["removed_while_reading"], ["No comparison yet.", 0, True])
+        self.assertEqual(got["exact_removed"], [True, "", [], "No comparison yet."])
 
 
 class DriftLogicTests(unittest.TestCase):
     """Pieces that don't need AWS."""
+
+    def test_rules_for_protocols_without_ports_arent_drift(self):
+        # ESP (50) and GRE (47) have no ports. AWS ignores the ones given and doesn't return
+        # any, while the state keeps the from_port = 0 and to_port = 0 they were written with.
+        sg = "sg-0123456789abcdef0"
+        rule = {"protocol": "50", "from_port": 0, "to_port": 0, "cidr_blocks": ["203.0.113.10/32"],
+                "ipv6_cidr_blocks": [], "prefix_list_ids": [], "security_groups": [],
+                "self": False, "description": "vpn"}
+        state = show_json([
+            res("aws_security_group", "vpn", {
+                "id": sg, "arn": f"arn:aws:ec2:us-east-1:{ACCOUNT}:security-group/{sg}",
+                "ingress": [rule], "egress": [], "tags": {}, "tags_all": {}}),
+            res("aws_security_group_rule", "gre", {
+                "type": "ingress", "security_group_id": sg, "protocol": "47", "from_port": 0,
+                "to_port": 0, "cidr_blocks": ["203.0.113.10/32"]})])
+        stack = drift.build_stack(state, "vpn", "", "state")
+
+        def report(perms):
+            live = drift.Live("aws_security_group", sg, "vpn", region="us-east-1", tags={},
+                              settings={"rules": drift.live_rule_atoms(perms, "ingress")})
+            live.account = ACCOUNT
+            inv = drift.Inventory(lives=[live], done={(ACCOUNT, "us-east-1", "aws_security_group")},
+                                  accounts={ACCOUNT: "default"}, regions={ACCOUNT: ["us-east-1"]})
+            return drift.evaluate([stack], inv, ignore=[])
+        same = report([{"IpProtocol": p, "IpRanges": [{"CidrIp": "203.0.113.10/32"}]}
+                       for p in ("50", "47")])
+        self.assertEqual([(f.status, f.detail) for f in same.findings], [])
+        # Rules with ports are still compared port by port.
+        changed = report([{"IpProtocol": "50", "IpRanges": [{"CidrIp": "203.0.113.10/32"}]},
+                          {"IpProtocol": "tcp", "FromPort": 22, "ToPort": 22,
+                           "IpRanges": [{"CidrIp": "203.0.113.10/32"}]}])
+        self.assertEqual([(c.setting, c.state, c.aws) for c in changed.findings[0].changes],
+                         [("ingress rule", drift.NOT_THERE, "tcp 22 from 203.0.113.10/32"),
+                          ("ingress rule", "47 from 203.0.113.10/32", drift.NOT_THERE)])
+
+    def test_utf16_state_from_windows_powershell(self):
+        # Windows PowerShell 5 writes terraform state pull > state.json as UTF-16.
+        doc = raw_state([res("aws_vpc", "a", {"id": "vpc-0123456789abcdef0", "tags": {}})])
+        path = Path(TMP) / "state-utf16.json"
+        path.write_bytes(json.dumps(doc, indent=2).replace("\n", "\r\n").encode("utf-16"))
+        stack = drift.load_source(str(path))
+        self.assertEqual([m.id for m in stack.resources], ["vpc-0123456789abcdef0"])
+
+    def test_version_3_state_says_what_it_is(self):
+        old = {"version": 3, "terraform_version": "0.11.14", "serial": 4, "lineage": "x",
+               "modules": [{"path": ["root"], "outputs": {}, "resources": {
+                   "aws_vpc.main": {"type": "aws_vpc", "primary": {"id": "vpc-1"}}}}]}
+        with self.assertRaises(drift.DriftError) as cm:
+            drift.load_source(write_json("old.tfstate", old))
+        self.assertIn("version 3 state, from Terraform 0.11 or older", str(cm.exception))
 
     def test_sqs_queue_urls_match_however_they_are_written(self):
         keys = {drift.match_key("aws_sqs_queue", x) for x in (

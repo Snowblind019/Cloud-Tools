@@ -215,5 +215,72 @@ class SecurityLookupTests(unittest.TestCase):
         self.assertIn("Security group changed: ", text)
 
 
+try:
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from awskit import trail_page
+except (ImportError, ValueError):  # pragma: no cover
+    trail_page = None
+
+
+@unittest.skipIf(trail_page is None, "GTK 4 not installed")
+class TrailPageTests(unittest.TestCase):
+    """The page's methods on a stand-in, so no display is needed."""
+
+    class Page:
+        def __init__(self):
+            import threading
+            from types import SimpleNamespace
+            P = trail_page.TrailPage
+            for name in ("search", "mine", "done", "failed", "set_busy"):
+                setattr(self, name, getattr(P, name).__get__(self))
+            self.WINDOWS, self.busy, self.events = P.WINDOWS, False, []
+            self.cancel = threading.Event()
+            self.attr_keys = [None] + list(trail.LOOKUP_KEYS)
+            self.win = SimpleNamespace(profile=None)
+            for name in ("attr", "value", "window", "regions", "errors", "writes", "security",
+                         "search_btn", "status", "table", "detail"):
+                setattr(self, name, mock.Mock())
+            self.attr.get_selected.return_value = self.attr_keys.index("user")
+            self.value.get_text.return_value = "alice"
+            self.window.get_selected.return_value = 1
+            self.regions.selected.return_value = ["us-east-1"]
+
+        def new_cancel(self):
+            import threading
+            self.cancel = threading.Event()
+            return self.cancel
+
+    def test_one_search_at_a_time(self):
+        # Enter in the search box ran a second search over the first, and whichever
+        # finished last filled the table, even if it was the older search.
+        page = self.Page()
+        with mock.patch.object(trail_page, "run_bg") as run_bg:
+            page.search()
+            first_cancel = page.cancel
+            page.value.get_text.return_value = "bob"
+            page.search()   # Enter while alice's search runs
+            page.mine()     # My actions too
+            self.assertEqual(run_bg.call_count, 1)
+            self.assertIs(page.cancel, first_cancel)   # Stop still stops alice's search
+            page.status.busy.assert_called_once()
+            page.search_btn.set_sensitive.assert_called_with(False)
+            page.done(([], []))
+            page.search_btn.set_sensitive.assert_called_with(True)
+            page.search()
+            self.assertEqual(run_bg.call_count, 2)
+        with mock.patch.object(trail_page, "show_message"):
+            page.failed(RuntimeError("nope"))
+        self.assertFalse(page.busy)
+        page.search_btn.set_sensitive.assert_called_with(True)
+
+    def test_a_new_search_clears_the_last_ones_notes(self):
+        page = self.Page()
+        page.done(([], ["us-west-2: AccessDenied: no"]))
+        self.assertIn("us-west-2", page.detail.set_text.call_args.args[0])
+        page.done(([], []))
+        page.detail.set_text.assert_called_with("")
+
+
 if __name__ == "__main__":
     unittest.main()

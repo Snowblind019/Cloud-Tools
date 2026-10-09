@@ -86,6 +86,7 @@ class Res:
     values: dict
     mode: str = "managed"
     unknown: set = field(default_factory=set)
+    partly: set = field(default_factory=set)     # attributes with something unknown inside
     refs: dict = field(default_factory=dict)
     each_value: object = None        # this instance's for_each value, when it can be worked out
     provider_key: str = ""
@@ -95,7 +96,13 @@ class Res:
 
     @property
     def base(self) -> str:
-        return re.sub(r"\[[^\]]*\]", "", self.address)
+        return _unkeyed(self.address)
+
+
+def _unkeyed(address) -> str:
+    """An address without its instance keys: module.net["prod"].aws_subnet.a[0] is
+    module.net.aws_subnet.a, the way the configuration names it."""
+    return re.sub(r"\[[^\]]*\]", "", str(address or ""))
 
 
 # =================================================================== loading
@@ -105,25 +112,55 @@ def load(path, plan=False, log=None) -> tuple:
     p = Path(os.path.expanduser(str(path)))
     try:
         if p.is_dir():
+            name = folder_name(p)
             if plan:
                 if log:
-                    log(f"Running terraform plan in {p.name}")
-                return tfplan.plan_directory(str(p), log=log), p.name
+                    log(f"Running terraform plan in {name}")
+                return tfplan.plan_directory(str(p), log=log), name
             if log:
-                log(f"Reading the current state in {p.name}")
-            return tfplan.show_state(str(p)), p.name
+                log(f"Reading the current state in {name}")
+            return tfplan.show_state(str(p)), name
         if not p.is_file():
             raise TfError(f"{path} doesn't exist. Give a state or plan JSON file, a saved plan, "
                           "or a Terraform folder.")
         data = p.read_bytes()
-        if data.lstrip()[:1] == b"{":
-            try:
-                return json.loads(data.decode("utf-8")), p.name
-            except ValueError as exc:
-                raise TfError(f"{p.name} isn't valid JSON: {exc}") from exc
+        try:
+            text = json_text(data)
+            if text is not None:
+                return json.loads(text), p.name
+        except ValueError as exc:
+            raise TfError(f"{p.name} isn't valid JSON: {exc}") from exc
         return tfplan.show_json(str(p)), p.name
     except tfplan.PlanError as exc:
         raise TfError(str(exc)) from exc
+
+
+def folder_name(path) -> str:
+    """A folder's own name, also for . and .. (whose Path.name is empty or ..)."""
+    p = Path(path)
+    return Path(os.path.abspath(p)).name or p.name
+
+
+# Byte order marks Windows tools put at the start of a file: PowerShell 5.1's > writes
+# UTF-16, and Out-File -Encoding utf8 and older Notepad write UTF-8 with one.
+BOMS = ((b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be"))
+
+
+def looks_like_json(head: bytes) -> bool:
+    """Whether a file that starts with head is JSON text rather than a saved binary plan."""
+    return head.startswith(tuple(b for b, _ in BOMS)) or head.lstrip()[:1] == b"{"
+
+
+def json_text(data: bytes):
+    """A JSON file's text, with any byte order mark taken off, or None when it isn't JSON
+    (a saved binary plan). Raises ValueError when it can't be decoded."""
+    enc = "utf-8"
+    for bom, name in BOMS:
+        if data.startswith(bom):
+            data, enc = data[len(bom):], name
+            break
+    text = data.decode(enc) if enc != "utf-8" or data.lstrip()[:1] == b"{" else ""
+    return text if text.lstrip()[:1] == "{" else None
 
 
 def read(paths, plan=False, log=None, known_accounts=()) -> mm.Snapshot:
@@ -167,6 +204,22 @@ def _unknown_keys(after_unknown) -> set:
         if v is True or (isinstance(v, list) and any(x is True for x in v)):
             out.add(k)
     return out
+
+
+def _partly_unknown_keys(after_unknown) -> set:
+    """Attributes with an unknown value somewhere inside, like an inline route whose
+    gateway is created in the same plan: [{"gateway_id": true}]."""
+    def has(v):
+        if v is True:
+            return True
+        if isinstance(v, dict):
+            return any(has(x) for x in v.values())
+        if isinstance(v, list):
+            return any(has(x) for x in v)
+        return False
+    if not isinstance(after_unknown, dict):
+        return set()
+    return {k for k, v in after_unknown.items() if has(v)}
 
 
 def _config_index(module, prefix, out, for_each=None, inputs=None, parent_inputs=None):
@@ -215,7 +268,7 @@ def _each_values(resources, for_each, inputs, root_vars):
         expr = for_each.get(res.base)
         if expr is None:
             continue
-        variables = root_vars if not res.module else inputs.get(res.module + ".", {})
+        variables = root_vars if not res.module else inputs.get(_unkeyed(res.module) + ".", {})
         collection = _expr_value(expr, variables)
         if collection is None:
             # A for expression over a variable, like { for k, v in var.x : k => v if ... }
@@ -258,9 +311,11 @@ def flatten(data) -> tuple:
         _walk(((data.get("prior_state") or {}).get("values") or {}).get("root_module"), prior)
         seen = {r.get("address") for _, r in flat}
         flat += [(m, r) for m, r in prior if r.get("mode") == "data" and r.get("address") not in seen]
-        unknown = {}
+        unknown, partly = {}, {}
         for rc in data.get("resource_changes", []) or []:
-            unknown[rc.get("address")] = _unknown_keys((rc.get("change") or {}).get("after_unknown"))
+            after_unknown = (rc.get("change") or {}).get("after_unknown")
+            unknown[rc.get("address")] = _unknown_keys(after_unknown)
+            partly[rc.get("address")] = _partly_unknown_keys(after_unknown)
         config, for_each, inputs = {}, {}, {}
         root_vars = {k: (v or {}).get("value") for k, v in (data.get("variables") or {}).items()}
         _config_index((data.get("configuration") or {}).get("root_module"), "", config,
@@ -270,6 +325,7 @@ def flatten(data) -> tuple:
         for module, r in flat:
             res = _res(module, r)
             res.unknown = unknown.get(res.address, set())
+            res.partly = partly.get(res.address, set())
             expr, pkey = config.get(res.base, ({}, ""))
             res.refs = _refs(expr)
             res.provider_key = pkey
@@ -403,7 +459,9 @@ class Builder:
             else:
                 keyed = [self.by_address.get(f"{prefix}{m.group(1)}[{json.dumps(k)}]") for k in keys]
                 keyed = [c for c in keyed if c is not None]
-                cands = self.by_base.get(prefix + m.group(1), [])
+                # In a module with count or for_each, the same module instance's resources.
+                cands = [c for c in self.by_base.get(_unkeyed(prefix) + m.group(1), [])
+                         if c.module == r.module]
                 same = [c for c in cands if c.index == r.index and r.index is not None]
                 cands = keyed if (keyed or dynamic) else (same or cands)
             for c in cands:
@@ -715,7 +773,11 @@ class Builder:
     ROUTE_TARGETS = ("gateway_id", "nat_gateway_id", "transit_gateway_id",
                      "vpc_peering_connection_id", "egress_only_gateway_id", "vpc_endpoint_id",
                      "network_interface_id", "instance_id", "local_gateway_id",
-                     "carrier_gateway_id")
+                     "carrier_gateway_id", "core_network_arn")
+    # The kinds of node each target attribute can point at.
+    ROUTE_TARGET_KINDS = {"gateway_id": ("igw", "vgw", "endpoint"), "nat_gateway_id": ("nat",),
+                          "transit_gateway_id": ("tgw",), "egress_only_gateway_id": ("eigw",),
+                          "vpc_endpoint_id": ("endpoint",), "instance_id": ("instance",)}
 
     def _route_parts(self, block, r=None, prefix=""):
         dest = (block.get(prefix + "cidr_block") or block.get(prefix + "ipv6_cidr_block") or
@@ -737,10 +799,31 @@ class Builder:
         for block in r.values.get("route") or []:
             if isinstance(block, dict):
                 dest, target = self._route_parts(block)
+                if dest and not target and "route" in r.partly:
+                    target = self._inline_route_target(r, block)
                 if dest and target:
                     routes.append({"dest": dest, "target": target})
-        mm.add_route_table(self.snap, r.node, self.ref(r, "vpc_id"), routes, main=main,
+        vpc = self.ref(r, "vpc_id")
+        if not vpc and main:
+            # aws_default_route_table for a VPC in the same plan: its vpc_id is only known
+            # after apply, but default_route_table_id refers to the VPC.
+            got = self._from_config(r, "default_route_table_id")
+            vpc = next((n for n in got if self.snap.get(n) is not None
+                        and self.snap.get(n).kind == "vpc"), "")
+        mm.add_route_table(self.snap, r.node, vpc, routes, main=main,
                            name=self.name_tag(r), tags=self.tags(r), source="terraform")
+
+    def _inline_route_target(self, r, block) -> str:
+        """An inline route's target in a plan where it's only known after apply, like an
+        internet gateway made in the same plan. The plan leaves that attribute out, and the
+        configuration lists what the route blocks refer to. Without a single match it's
+        (known after apply), so the route isn't dropped."""
+        missing = [k for k in self.ROUTE_TARGETS if k not in block]
+        if not missing:
+            return ""
+        kinds = {kind for k in missing for kind in self.ROUTE_TARGET_KINDS.get(k, ())}
+        found = [n for n in self._from_config(r, "route") if mm._target_kind(self.snap, n) in kinds]
+        return found[0] if len(found) == 1 else KAA
 
     def t_aws_default_route_table(self, r):
         self.t_aws_route_table(r, main=True)

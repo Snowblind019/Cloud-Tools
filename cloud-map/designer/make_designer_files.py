@@ -107,6 +107,7 @@ def broken():
     make("arrow-not-between-groups", lambda d: d["arrows"][0].update({"to": "s3"}))
     make("duplicate-names", lambda d: sub(d, "private-b")["settings"].update(name="private-a"))
     make("unsafe-name", lambda d: sub(d, "private-b")["settings"].update(name="private b!"))
+    make("bad-description", lambda d: d["sgs"][1]["settings"].update(description="App servers – prod"))
 
     def outside(d):
         s = sub(d, "private-b")

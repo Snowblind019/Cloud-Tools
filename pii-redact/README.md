@@ -324,7 +324,7 @@ Use these names with `--skip` and `--only`.
 | `secret_values` | on | Values of password, secret, token, api_key and similar settings (names that end in them too, like `DATABASE_PASSWORD` or `MasterUserPassword`), secrets inside a value like Secrets Manager's `SecretString`, `--password` and `-p` flags, and `Authorization:` headers |
 | `emails` | on | Email addresses |
 | `phones` | on | US formats and +country numbers |
-| `names` | on | Values of owner, user, username, display_name, first_name, organization and similar settings |
+| `names` | on | Values of owner, user, username, display_name, first_name, organization and similar settings. Without quotes, a name runs on through the capitalized words after it, so `Owner: Jane Doe` hides both. |
 | `home_paths` | on | The name in /home/name, /Users/name and C:\Users\name |
 | `gov_ids` | on | US Social Security numbers and birth date fields |
 | `cards` | on | Checked with the Luhn formula to avoid false hits |

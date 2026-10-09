@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 APP_NAME = "AWS Kit"
 APP_ID = "io.github.Snowblind019.AwsKit"
 PICKER_APP_ID = APP_ID + ".Profiles"
@@ -71,11 +71,15 @@ DEFAULT_CONFIG = {
 def load_config() -> dict:
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))
     try:
-        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        # utf-8-sig: a file saved from Notepad or PowerShell can start with a byte order mark
+        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
         if isinstance(data, dict):
             for key, value in data.items():
                 if key in cfg:
-                    if isinstance(value, type(cfg[key])):
+                    if isinstance(cfg[key], float) and isinstance(value, int) \
+                            and not isinstance(value, bool):
+                        cfg[key] = float(value)       # "notify_threshold": 20
+                    elif isinstance(value, type(cfg[key])):
                         cfg[key] = value
                 elif isinstance(key, str):
                     # Keys this version doesn't know (a newer AWS Kit's) are kept as they
@@ -86,9 +90,31 @@ def load_config() -> dict:
     return cfg
 
 
+def keep_unreadable(path):
+    """Before a settings file is replaced: when what's there can't be read (a typo made
+    while editing it by hand), load_config used the defaults instead, so saving would wipe
+    it. It's kept next to it as NAME.bad first, to fix and put back."""
+    try:
+        raw = Path(path).read_bytes()
+    except OSError:
+        return
+    if not raw.strip():
+        return
+    try:
+        if isinstance(json.loads(raw.decode("utf-8-sig")), dict):
+            return
+    except (ValueError, RecursionError):
+        pass
+    try:
+        write_atomic(Path(str(path) + ".bad"), raw, mode=0o600)
+    except OSError:
+        pass
+
+
 def save_config(cfg: dict) -> bool:
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        keep_unreadable(CONFIG_FILE)
         write_atomic(CONFIG_FILE, json.dumps(cfg, indent=2) + "\n", mode=0o600)
         return True
     except OSError:
@@ -379,6 +405,10 @@ def parse_when(text: str) -> datetime:
         return datetime.now(timezone.utc) - parse_duration(text)
     except ValueError:
         pass
+    except OverflowError as exc:
+        # A date typed without dashes, like 20261001, reads as that many hours
+        raise ValueError(f"Can't read time '{text}'. A plain number means hours. Use 2h, 3d, "
+                         "or 2026-10-01 14:30.") from exc
     try:
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError as exc:
@@ -444,7 +474,9 @@ def to_csv(rows, columns) -> str:
 
 def to_markdown(rows, columns, title=None, intro=None) -> str:
     def cell(v):
-        return str(v if v is not None else "").replace("|", "\\|").replace("\n", " ")
+        # A carriage return on its own (an EC2 Name tag can hold one) also ends a table row.
+        text = str(v if v is not None else "").replace("|", "\\|")
+        return text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
     lines = []
     if title:
         lines += [f"# {title}", ""]
@@ -577,13 +609,25 @@ def is_wsl() -> bool:
 
 
 def prepare_gtk_env():
-    """Runs before GTK loads. WSL usually has no GL or Vulkan driver GTK can use, and
-    GTK 4 aborts the whole app when its GL setup fails (Couldn't open libGLESv2.so.2).
-    The cairo renderer draws in software and needs neither. Setting GSK_RENDERER
-    yourself skips this, for example GSK_RENDERER=ngl awskit once GL works there."""
-    if is_wsl() and "GSK_RENDERER" not in os.environ:
+    """Runs before GTK loads, and only changes anything on WSL.
+
+    WSL usually has no GL or Vulkan driver GTK can use, and GTK 4 aborts the whole app
+    when its GL setup fails (Couldn't open libGLESv2.so.2). The cairo renderer draws in
+    software and needs neither. Setting GSK_RENDERER yourself skips this, for example
+    GSK_RENDERER=ngl awskit once GL works there.
+
+    WSLg's Wayland side never takes GTK 4 popovers off the screen once they're closed
+    (microsoft/wslg#1265), so a menu or a dropdown stays stuck there until the app quits.
+    Its X11 side doesn't have that problem, so GTK uses that when WSLg offers it, with
+    Wayland as the fallback. Setting GDK_BACKEND yourself skips this, for example
+    GDK_BACKEND=wayland awskit."""
+    if not is_wsl():
+        return
+    if "GSK_RENDERER" not in os.environ:
         os.environ["GSK_RENDERER"] = "cairo"
         os.environ.setdefault("GDK_DISABLE", "gl,vulkan")
+    if "GDK_BACKEND" not in os.environ and os.environ.get("DISPLAY"):
+        os.environ["GDK_BACKEND"] = "x11,wayland"
 
 
 def data_dir() -> Path:
@@ -727,22 +771,30 @@ def read_clipboard() -> str:
 
 
 def write_clipboard(text: str):
-    backend = clip_backend()
-    if backend == "win32":
+    backends = clip_backends()
+    if backends == ["win32"]:
         _win32_write({13: (text.replace("\r\n", "\n").replace("\n", "\r\n") + "\0")
                       .encode("utf-16-le")})
         return
-    if backend == "windows":
+    if backends[:1] == ["windows"]:
         # clip.exe only reads Unicode correctly as UTF-16 with a byte order mark,
         # and Windows apps expect CRLF line endings.
-        cmd = [windows_tool("clip.exe")]
         data = b"\xff\xfe" + text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-16-le")
-    else:
-        cmd = CLIP_WRITE[backend]
-        data = text.encode("utf-8")
+        try:
+            subprocess.run([windows_tool("clip.exe")], input=data, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=10, check=True)
+            return
+        except (OSError, subprocess.SubprocessError) as exc:
+            # Windows programs can't run here (interop turned off in wsl.conf), so try
+            # wl-copy or xclip through WSLg, the way reading the clipboard does.
+            backends = backends[1:]
+            if not backends:
+                raise ClipboardError(f"Couldn't write to the clipboard: {exc}") from exc
+    backend = backends[0] if backends else clip_backend()
     try:
-        subprocess.run(cmd, input=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=10, check=True)
+        subprocess.run(CLIP_WRITE[backend], input=text.encode("utf-8"),
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+                       check=True)
     except (OSError, subprocess.SubprocessError) as exc:
         raise ClipboardError(f"Couldn't write to the clipboard: {exc}") from exc
 

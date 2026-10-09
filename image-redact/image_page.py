@@ -57,6 +57,7 @@ class ImageEditor(Gtk.Box):
         self.zoom, self.fit = 1.0, True
         self.ox = self.oy = PAD
         self.text_request = None
+        self._double_text = None
         self._loading_style = False
         self._zoom_anchor = None        # (image x, image y, view x, view y) to keep in place
         self._wheel = [0.0, 0.0, 0]     # notches so far, last direction, time of last one
@@ -398,11 +399,28 @@ class ImageEditor(Gtk.Box):
             dialog.open(self.get_root(), None, done)
         self.confirm_discard(pick)
 
+    def _latest(self):
+        """Wraps one open or paste's callbacks. Starting another open or paste makes the
+        older one's result count for nothing, so a slow open that finishes after a paste
+        can't replace the pasted image without asking."""
+        self._load_seq = getattr(self, "_load_seq", 0) + 1
+        seq = self._load_seq
+
+        def wrap(fn):
+            def call(*args):
+                if seq == self._load_seq:
+                    return fn(*args)
+                return None
+            return call
+        return wrap
+
     def open_path(self, path, confirmed=False):
         def go():
+            latest = self._latest()
             self.set_status(f"Opening {os.path.basename(path)}...", busy=True)
-            run_bg(lambda: ir.load_image_bytes(path), lambda png: self.load_png(png, path),
-                   lambda exc: self.set_status(str(exc)))
+            run_bg(lambda: ir.load_image_bytes(path),
+                   latest(lambda png: self.load_png(png, path)),
+                   latest(lambda exc: self.set_status(str(exc))))
         if confirmed:
             go()
         else:
@@ -410,23 +428,27 @@ class ImageEditor(Gtk.Box):
 
     def paste(self):
         def go():
+            latest = self._latest()
             self.set_status("Reading the clipboard...", busy=True)
             if is_wsl():
                 # The Windows clipboard, where Snipping Tool and Win+Shift+S put screenshots.
-                run_bg(read_clipboard_image, self._pasted_bytes, self._paste_failed)
+                run_bg(read_clipboard_image, latest(self._pasted_bytes),
+                       latest(self._paste_failed))
             else:
-                self.get_clipboard().read_texture_async(None, self._pasted_texture)
+                self.get_clipboard().read_texture_async(
+                    None, lambda clip, result: self._pasted_texture(clip, result, latest))
         self.confirm_discard(go)
 
-    def _pasted_texture(self, clipboard, result):
+    def _pasted_texture(self, clipboard, result, latest=None):
+        latest = latest or (lambda fn: fn)
         try:
             texture = clipboard.read_texture_finish(result)
         except GLib.Error:
             texture = None
         if texture is not None:
-            self.load_png(texture.save_to_png_bytes().get_data(), None)
+            latest(self.load_png)(texture.save_to_png_bytes().get_data(), None)
         else:
-            run_bg(read_clipboard_image, self._pasted_bytes, self._paste_failed)
+            run_bg(read_clipboard_image, latest(self._pasted_bytes), latest(self._paste_failed))
 
     def _pasted_bytes(self, png):
         if png:
@@ -441,7 +463,7 @@ class ImageEditor(Gtk.Box):
     def _dropped(self, target, value, x, y):
         if isinstance(value, Gdk.Texture):
             png = value.save_to_png_bytes().get_data()
-            self.confirm_discard(lambda: self.load_png(png, None))
+            self.confirm_discard(lambda: (self._latest(), self.load_png(png, None)))
             return True
         files = value.get_files() if isinstance(value, Gdk.FileList) else [value]
         for f in files:
@@ -482,15 +504,24 @@ class ImageEditor(Gtk.Box):
         self._update_state()
         self.set_status("Reading the text in the image...", busy=True)
 
-        def finished(msg):
+        def finished(apply):
+            selected = ed.selected
+            msg = apply()
             if msg is not None:
+                if ed.selected is not selected:
+                    # A detected box that was selected is gone, so its controls go too.
+                    self._sync_style_controls()
                 self._refresh()
                 self.set_status(msg)
-        run_bg(lambda: ir.read_text(png, lang), lambda passes: finished(ed.found(gen, passes)),
-               lambda exc: finished(ed.find_failed(gen, exc)))
+        run_bg(lambda: ir.read_text(png, lang),
+               lambda passes: finished(lambda: ed.found(gen, passes)),
+               lambda exc: finished(lambda: ed.find_failed(gen, exc)))
 
     def _apply_boxes(self):
+        selected = self.ed.selected
         msg = self.ed.apply_passes()
+        if self.ed.selected is not selected:
+            self._sync_style_controls()
         self._refresh()
         self.set_status(msg)
 
@@ -671,23 +702,27 @@ class ImageEditor(Gtk.Box):
         return hadj.get_page_size() / 2, vadj.get_page_size() / 2
 
     def _scrolled(self, ctrl, dx, dy):
-        """The mouse wheel zooms toward the pointer, with or without Ctrl. Shift+wheel and
-        a tilting wheel scroll. A touchpad scrolls, and zooms with Ctrl held or a pinch."""
+        """The wheel scrolls up and down, Shift+wheel left and right, and Ctrl+wheel zooms
+        toward the pointer. A touchpad scrolls both ways, and zooms with Ctrl held or a
+        pinch."""
         if self.ed.surface is None or not self._over_image():
             return False
         state = ctrl.get_current_event_state()
         ctrl_held = bool(state & Gdk.ModifierType.CONTROL_MASK)
         shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
         kind = scroll_kind(ctrl)
-        if kind == "touchpad" and not ctrl_held:
-            return False                    # the scroller pans, with its own momentum
-        if shift and not ctrl_held:
-            self._scroll_view(dx, dy, kind)
+        if not ctrl_held:
+            if kind == "touchpad":
+                return False                # the scroller pans, with its own momentum
+            if shift:
+                # Some systems already turn Shift+wheel into a sideways scroll, so take
+                # whichever way it came.
+                self._scroll_view(dy or dx, 0, kind)
+            else:
+                self._scroll_view(dx, dy, kind)
             return True
         if not dy:
-            if dx:
-                self._scroll_view(dx, 0, kind)
-            return True
+            return True                     # a sideways tilt with Ctrl held does nothing
         anchor = self._pointer_anchor()
         if kind == "wheel":
             steps = self._wheel_steps(dy)
@@ -722,11 +757,28 @@ class ImageEditor(Gtk.Box):
         return steps
 
     def _scroll_view(self, dx, dy, kind):
-        self._zoom_anchor = None
-        for adj, delta in ((self.scroller.get_hadjustment(), dx),
-                           (self.scroller.get_vadjustment(), dy)):
-            if delta:
-                step = delta * adj.get_page_size() ** (2 / 3) if kind == "wheel" else delta
+        hadj, vadj = self.scroller.get_hadjustment(), self.scroller.get_vadjustment()
+        steps = []
+        for adj, delta in ((hadj, dx), (vadj, dy)):
+            steps.append(delta * adj.get_page_size() ** (2 / 3) if kind == "wheel" else delta)
+        if self._zoom_anchor is not None:
+            # A zoom that isn't laid out yet: the scrollbars still have the old size, so
+            # scrolling them now would lose where the zoom is going. Scroll from there
+            # instead, and it gets there once the new size is in.
+            sx, sy, _ox, _oy = self._layout()
+            cw, ch = self._content_size()
+            ix, iy, vx, vy = self._zoom_anchor
+            moved = []
+            for adj, start, size, step in ((hadj, sx, cw, steps[0]), (vadj, sy, ch, steps[1])):
+                page = adj.get_page_size()
+                top = max(max(size, page) - page, 0)
+                end = min(max(min(max(start, 0), top) + step, 0), top)
+                moved.append(end - start)
+            self._zoom_anchor = (ix, iy, vx - moved[0], vy - moved[1])
+            self._adjustment_changed()
+            return
+        for adj, step in ((hadj, steps[0]), (vadj, steps[1])):
+            if step:
                 adj.set_value(min(max(adj.get_value() + step, 0),
                                   max(adj.get_upper() - adj.get_page_size(), 0)))
 
@@ -741,9 +793,10 @@ class ImageEditor(Gtk.Box):
             self.set_zoom(zoom0 * scale, anchor)
 
     def _pan_begin(self, gesture, x, y):
+        # From where the view is going, in case a zoom isn't laid out yet.
+        sx, sy, _ox, _oy = self._layout()
         self._zoom_anchor = None
-        self._pan_start = (self.scroller.get_hadjustment().get_value(),
-                           self.scroller.get_vadjustment().get_value())
+        self._pan_start = (sx, sy)
 
     def _pan_update(self, gesture, dx, dy):
         hx, vy = self._pan_start
@@ -759,10 +812,12 @@ class ImageEditor(Gtk.Box):
 
     def _pressed(self, gesture, n, x, y):
         self.area.grab_focus()
+        # A double-click on text edits it. The entry opens when the button comes up, like a
+        # click with the Text tool, since the drag that starts on this same press takes the
+        # focus back to the image.
+        self._double_text = None
         if n == 2 and self.ed.surface is not None:
-            request = self.ed.text_at_double_click(*self.to_image(x, y), self.zoom)
-            if request:
-                self._show_text_entry(request)
+            self._double_text = self.ed.text_at_double_click(*self.to_image(x, y), self.zoom)
 
     def _drag_begin(self, gesture, x, y):
         self.area.grab_focus()
@@ -783,6 +838,8 @@ class ImageEditor(Gtk.Box):
 
     def _drag_end(self, gesture, dx, dy):
         request = self.ed.drag_end(self.zoom)
+        double, self._double_text = self._double_text, None
+        request = request or double
         if request:
             self._show_text_entry(request)
         self._refresh()

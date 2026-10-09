@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -617,6 +618,26 @@ class AuditCheckTests(unittest.TestCase):
         self.assertEqual([(f.check, f.severity) for f in found],
                          [("Couldn't check the account's S3 public access block", "info")])
 
+    def test_credential_report_denied_keeps_the_root_findings(self):
+        # A role without iam:GenerateCredentialReport used to lose the whole IAM check,
+        # root without MFA included, to one "no permission" note.
+        iam = _Stub(get_account_summary={"SummaryMap": {"AccountMFAEnabled": 0,
+                                                        "AccountAccessKeysPresent": 1,
+                                                        "Users": 2}},
+                    get_account_password_policy={"PasswordPolicy": {"MinimumPasswordLength": 14}},
+                    generate_credential_report=client_error("AccessDenied"))
+        found = audit.check_iam(_FakeCtx(iam=iam), "global")
+        self.assertEqual([(f.check, f.severity) for f in found],
+                         [("Root user has access keys", "critical"),
+                          ("Root user has no MFA", "high"),
+                          ("Couldn't read the credential report", "info")])
+        self.assertIn("weren't checked", found[-1].detail)
+        throttled = _Stub(get_account_summary={"SummaryMap": {}},
+                          get_account_password_policy={"PasswordPolicy": {}},
+                          generate_credential_report=client_error("Throttling"))
+        with self.assertRaises(Exception):  # still a warning for the whole check
+            audit.check_iam(_FakeCtx(iam=throttled), "global")
+
 
 @unittest.skipIf(test_tools.mock_aws is None, "moto not installed")
 class AuditMotoTests(unittest.TestCase):
@@ -657,6 +678,43 @@ class AuditMotoTests(unittest.TestCase):
         self.assertEqual(len(warnings), 2, warnings)
         self.assertTrue(all("couldn't check Test check" in w for w in warnings), warnings)
         self.assertTrue(any("2 regions" in w for w in warnings), warnings)
+
+
+try:
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from awskit import audit_page
+except (ImportError, ValueError):  # pragma: no cover
+    audit_page = None
+
+
+@unittest.skipIf(audit_page is None, "GTK 4 not installed")
+class AuditPageTests(unittest.TestCase):
+    """The page's methods on a stand-in, so no display is needed."""
+
+    class Page:
+        def __init__(self, stopped):
+            self.done = audit_page.AuditPage.done.__get__(self)
+            self.cancel = threading.Event()
+            if stopped:
+                self.cancel.set()
+            self.run_btn, self.table, self.status, self.detail = (mock.Mock() for _ in range(4))
+            self.show_counts, self.apply_level = mock.Mock(), mock.Mock()
+
+    def test_stopping_an_audit_never_looks_clean(self):
+        # Stop used to end in "Audit finished" and "No findings.", like a clean account
+        page = self.Page(stopped=True)
+        page.done(([], []))
+        self.assertIn("Stopped before the checks finished", page.table.clear.call_args.args[0])
+        page.show_counts.assert_called_once_with(True)
+        self.assertIn("stopped early", page.status.idle.call_args.args[0])
+        self.assertIn("some checks didn't run", page.status.idle.call_args.args[0])
+
+        page = self.Page(stopped=False)
+        page.done(([], []))
+        self.assertIn("No findings", page.table.clear.call_args.args[0])
+        page.show_counts.assert_called_once_with(False)
+        self.assertTrue(page.status.idle.call_args.args[0].startswith("Audit finished"))
 
 
 if __name__ == "__main__":

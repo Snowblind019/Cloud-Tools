@@ -64,6 +64,8 @@ class EditController:
         self.webkit = None            # the WebKit module, once loaded
         self.problem = None           # why WebKit can't be used, once known
         self.path = None              # the working .drawio file
+        self.snap = None              # the snapshot it's a map of, and its file
+        self.snap_path = None
         self.map_type = None
         self.mode = None              # "embedded", "outside" or None
         self.kind = "map"             # what's being edited: a map, or a design
@@ -73,6 +75,7 @@ class EditController:
         self._check_id = 0
         self._load_timer = 0
         self._done_timer = 0
+        self._closing = False         # AWS Kit is closing, already asked about changes
         self.editor_box = self._editor_widgets()
         self.outside_box = self._outside_widgets()
         self.pull_bar = self._pull_widgets()
@@ -199,6 +202,7 @@ class EditController:
             page.edit_btn.set_sensitive(True)
             path, lay, pulled = result
             self.path, self.map_type, self.kind = path, map_type, "map"
+            self.snap, self.snap_path = snap, snap_path
             self.known_hash = maplayoutmem.file_hash(path.read_bytes())
             self.watch(path)
             self.pull_bar.set_reveal_child(False)
@@ -589,7 +593,11 @@ class EditController:
             self.known_hash = maplayoutmem.file_hash(Path(path).read_bytes())
             page.load_design(path, note=f"{what}.", fit=False)
             return
-        snap, snap_path = page.snap, page.snap_path
+        # The snapshot the editor was opened for: a scan that finished while draw.io was
+        # open may have put another one on the page, and this layout isn't for that one.
+        snap, snap_path = self.snap, self.snap_path
+        if page.snap is not None and page.snap_path is not None and page.snap_path == snap_path:
+            snap = page.snap                 # the same file read again: the newest copy
         if snap is None or not snap_path:
             return
         page.status.busy("Reading your layout back...", progress=False)
@@ -670,6 +678,42 @@ class EditController:
         return False
 
     # ---- ending
+    def close_request(self, win):
+        """Closing AWS Kit while draw.io has changes that weren't saved: ask first, the
+        same as Cancel does."""
+        if self._closing or self.mode != "embedded" or self.view is None:
+            return False
+
+        def close():
+            self._closing = True
+            win.close()
+
+        def answered(view, result, *_):
+            try:
+                value = view.evaluate_javascript_finish(result)
+                modified = bool(value.to_boolean()) if value is not None else False
+            except GLib.Error:
+                modified = False
+            if not modified:
+                close()
+                return
+            dlg = Gtk.AlertDialog(message="Close without saving your changes?",
+                                  detail="Nothing you changed in draw.io since the last save "
+                                         "will be kept. Press Done first to keep it.")
+            dlg.set_buttons(["Keep editing", "Close anyway"])
+            dlg.set_cancel_button(0)
+            dlg.set_default_button(0)
+
+            def chosen(d, res):
+                try:
+                    if d.choose_finish(res) == 1:
+                        close()
+                except GLib.Error:
+                    pass
+            dlg.choose(win, None, chosen)
+        self.view.evaluate_javascript("awskitModified()", -1, None, None, None, answered, None)
+        return True
+
     def stop(self):
         if self.bridge is not None:
             self.bridge.closed = True        # no exit callback for a stop asked for here

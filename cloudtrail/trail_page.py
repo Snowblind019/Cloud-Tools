@@ -34,6 +34,9 @@ class TrailPage(Page):
                          "trail, and covers the last 90 days of management events. Handy for "
                          "chasing down AccessDenied errors in your own builds.")
         self.events = []
+        # True while a search, or My actions working out who you are, runs. Enter in the
+        # search box would otherwise start a second search over the first one.
+        self.busy = False
         row1 = self.toolbar()
         self.attr_keys = [None] + list(trail.LOOKUP_KEYS)
         self.attr = string_dropdown(["Anything"] + [v[1] for v in trail.LOOKUP_KEYS.values()])
@@ -106,11 +109,19 @@ class TrailPage(Page):
             self.value.set_text("")
             self.value.set_placeholder_text("Pick a filter on the left, then type here")
 
+    def set_busy(self, busy):
+        self.busy = busy
+        self.search_btn.set_sensitive(not busy)
+
     def mine(self):
+        if self.busy:
+            return
         profile = self.win.profile
+        self.set_busy(True)
         self.status.busy("Checking who you are...", progress=False)
 
         def done(name):
+            self.set_busy(False)
             self.attr.set_selected(self.attr_keys.index("user"))
             self.value.set_text(name)
             self.status.idle("")
@@ -118,6 +129,8 @@ class TrailPage(Page):
         run_bg(lambda: trail.my_session_name(AwsContext(profile)), done, self.failed)
 
     def search(self):
+        if self.busy:
+            return
         key = self.attr_keys[self.attr.get_selected()]
         value = self.value.get_text().strip() if key else None
         if key and not value:
@@ -131,7 +144,7 @@ class TrailPage(Page):
         errors, writes = self.errors.get_active(), self.writes.get_active()
         security = self.security.get_active()
         cancel = self.new_cancel()
-        self.search_btn.set_sensitive(False)
+        self.set_busy(True)
         self.status.busy("Reading event history...", cancel)
         progress = on_main(self.status.progress)
         run_bg(lambda: trail.lookup(profile, regions, start, end, key, value, errors, writes,
@@ -141,7 +154,7 @@ class TrailPage(Page):
 
     def done(self, result):
         self.events, warnings = result
-        self.search_btn.set_sensitive(True)
+        self.set_busy(False)
         rows = []
         for e in self.events:
             row = e.row()
@@ -155,11 +168,11 @@ class TrailPage(Page):
         flagged = sum(1 for e in self.events if e.alert)
         self.status.idle(f"{len(self.events)} event(s), {failed} failed, "
                          f"{flagged} worth a look.")
-        if warnings:
-            self.detail.set_text("Notes:\n\n" + "\n".join(warnings))
+        # This search's notes, or nothing: an old search's would name regions that worked
+        self.detail.set_text("Notes:\n\n" + "\n".join(warnings) if warnings else "")
 
     def failed(self, exc):
-        self.search_btn.set_sensitive(True)
+        self.set_busy(False)
         self.status.idle("")
         show_message(self.win, "Lookup failed", error_text(exc, self.win.profile))
 

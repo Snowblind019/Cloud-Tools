@@ -66,7 +66,7 @@ Every finding comes with a short explanation and a fix, often the exact CLI comm
 
 1. Pick **Accounts** and **Regions**, or leave them on the current profile and every enabled region.
 2. Pick **Checks** to run only some of them, or leave it on **All checks**.
-3. Press **Run audit**. The counts at the top show how many findings there are at each level.
+3. Press **Run audit**. The counts at the top show how many findings there are at each level. **Stop** at the bottom cancels, and the status line then says the audit stopped early, so a partial run doesn't pass for a clean one.
 4. Use the dropdown on the right to show **Critical and high**, **Medium and worse**, **Low and worse**, or **Everything**. The filter box narrows it further.
 5. Click a finding to see the details and how to fix it.
 6. **Export** saves the findings, with fixes, as Markdown, CSV or JSON.
@@ -158,7 +158,7 @@ The AWS managed `SecurityAudit` policy covers all of it. The exact actions:
 
 </details>
 
-If a role is missing some of these, the audit still runs the rest and lists what it couldn't check, like "no permission for Public Lambda functions (17 regions)". Smaller gaps show up as info findings, so they don't look like a clean result: no permission for the account's S3 Block Public Access, for function URLs or policies, or for Aurora snapshots. Regions it couldn't reach, or where AWS didn't accept the credentials, are listed in the notes too.
+If a role is missing some of these, the audit still runs the rest and lists what it couldn't check, like "no permission for Public Lambda functions (17 regions)". Smaller gaps show up as info findings, so they don't look like a clean result: no permission for the account's S3 Block Public Access, for function URLs or policies, for Aurora snapshots, or for the credential report (the root user checks still run). Regions it couldn't reach, or where AWS didn't accept the credentials, are listed in the notes too.
 
 `iam:GenerateCredentialReport` is the one call that isn't a describe, list or get. It only asks IAM to build the credential report so it can be read, and changes nothing.
 

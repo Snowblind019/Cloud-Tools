@@ -821,6 +821,19 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(org.counts(), {"accounts": 6, "ous": 5, "policies": 9})
         self.assertEqual(org.enabled, [sc.RCP, sc.SCP])
 
+    def test_files_saved_on_windows(self):
+        # Notepad can save UTF-8 with a byte order mark, and Windows PowerShell 5.1 writes
+        # UTF-16 with one for terraform show -json > state.json. They were "isn't JSON".
+        for src, enc in ((DEMO, "utf-8-sig"), (DEMO, "utf-16"), (D1, "utf-8-sig"), (D1, "utf-16")):
+            path = self.dir / f"{src.stem}-{enc}.json"
+            path.write_bytes(src.read_text(encoding="utf-8").encode(enc))
+            self.assertEqual(sc.load_file(path).counts(), sc.load_file(src).counts(), path.name)
+        path = self.dir / "words.json"
+        path.write_bytes("not json at all".encode("utf-16"))
+        with self.assertRaises(sc.ScpError) as cm:
+            sc.load_file(path)
+        self.assertIn("isn't JSON", str(cm.exception))
+
     def bad(self, data, text=None):
         path = self.dir / "bad.json"
         path.write_text(json.dumps(data) if not isinstance(data, str) else data)
@@ -957,6 +970,133 @@ class DraftTests(unittest.TestCase):
         self.assertTrue(any("No Version" in w for w in warnings))
         with self.assertRaises(sc.ScpError):
             sc.make_draft(self.text, "nowhere", self.org)
+
+    def test_draft_with_number_sids(self):
+        # Checking it raised TypeError, which left the page's "Looks fine" up with no draft
+        # and turned the next org load into "Couldn't read the organization".
+        text = json.dumps({"Version": "2012-10-17", "Statement": [
+            {"Sid": 1, "Effect": "Deny", "Action": "s3:DeleteBucket", "Resource": "*"},
+            {"Sid": 1, "Effect": "Deny", "Action": "s3:DeleteObject", "Resource": "*"}]})
+        _doc, problems, warnings = sc.check_draft(text)
+        self.assertEqual(problems, [])
+        self.assertTrue(any(w.startswith("Duplicate Sid") for w in warnings))
+        v = sc.check_action(self.org, "shop-dev", "s3:DeleteBucket", region="us-east-1",
+                            draft=sc.make_draft(text, "Workloads", self.org))
+        self.assertEqual(v.headline, "Blocked by the draft SCP")
+
+
+PAGE_CHECK = r'''
+import json, os, sys
+root, cfg, folder = sys.argv[1:4]
+os.environ["XDG_CONFIG_HOME"] = cfg
+sys.path.insert(0, root)
+import gi
+gi.require_version("Gtk", "4.0")
+from gi.repository import GLib
+from awskit import app, scp_page
+
+msgs, out = [], {}
+scp_page.show_message = lambda parent, heading, body="": msgs.append(f"{heading}: {body}")
+a = app.App(page="scp")
+DEMO = os.path.join(root, "org-scps", "examples", "demo-org.json")
+
+
+def page():
+    return a.get_active_window().pages["scp"]
+
+
+def load():
+    page().load_path(DEMO)
+
+
+def ps_draft():
+    s = page()
+    s.draft_check.set_active(True)
+    s._load_draft_file(os.path.join(folder, "draft-ps.json"))   # UTF-16, from PowerShell
+    s._draft_changed(now=True)
+    out["ps"] = [s.draft is not None, s.draft_status.get_text()]
+
+
+def number_sids():
+    page().draft_buffer.set_text(json.dumps({"Version": "2012-10-17", "Statement": [
+        {"Sid": 1, "Effect": "Deny", "Action": "s3:DeleteBucket", "Resource": "*"},
+        {"Sid": 1, "Effect": "Deny", "Action": "s3:DeleteObject", "Resource": "*"}]}))
+
+
+def checked():
+    s = page()
+    out["sids"] = [s.draft is not None, s.draft_status.get_text()]
+    load()                                   # load the org again, with that draft on
+
+
+def finish():
+    out["reloaded"] = page().draft is not None
+    out["msgs"] = msgs
+    print(json.dumps(out))
+    a.quit()
+
+
+steps = [(300, load), (1500, ps_draft), (300, number_sids), (900, checked), (1500, finish)]
+
+
+def run(i=0):
+    if i < len(steps):
+        ms, fn = steps[i]
+
+        def go():
+            try:
+                fn()
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                print(json.dumps({"error": repr(exc)}))
+                a.quit()
+                return False
+            run(i + 1)
+            return False
+        GLib.timeout_add(ms, go)
+
+
+def start():
+    if a.get_active_window() is None:
+        return True
+    run()
+    return False
+
+
+GLib.timeout_add(200, start)
+a.run([])
+'''
+
+
+class PageTests(unittest.TestCase):
+    def test_draft_files_from_windows_and_odd_drafts(self):
+        import shutil
+        import subprocess
+        try:
+            import gi
+            gi.require_version("Gtk", "4.0")
+        except (ImportError, ValueError):
+            self.skipTest("GTK 4 for Python isn't installed")
+        folder = Path(tempfile.mkdtemp(prefix="scp-page-", dir=TMP))
+        (folder / "check.py").write_text(PAGE_CHECK, encoding="utf-8")
+        (folder / "draft-ps.json").write_bytes(DRAFT.read_text(encoding="utf-8").encode("utf-16"))
+        cmd = [sys.executable, str(folder / "check.py"), str(ROOT), str(folder), str(folder)]
+        if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+            if not shutil.which("xvfb-run"):
+                self.skipTest("no display and no xvfb-run")
+            cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24"] + cmd
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        lines = [x for x in r.stdout.splitlines() if x.startswith("{")]
+        self.assertTrue(lines, r.stdout[-2000:] + r.stderr[-2000:])
+        got = json.loads(lines[-1])
+        self.assertNotIn("error", got)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertEqual(got["ps"][0], True, got["ps"][1])        # the UTF-16 draft opened
+        self.assertTrue(got["sids"][0], got["sids"][1])           # Sid 1 twice: a warning only
+        self.assertIn("Duplicate Sid", got["sids"][1])
+        self.assertTrue(got["reloaded"])
+        self.assertEqual(got["msgs"], [])
 
 
 # =================================================================== reading AWS (moto)
@@ -1341,6 +1481,14 @@ class CliTests(unittest.TestCase):
                               "--draft", str(bad)])
         self.assertEqual(rc, sc.EXIT_ERROR)
         self.assertIn("draft SCP has problems", err)
+        ps = bad.with_name("draft-ps.json")         # Windows PowerShell's > writes UTF-16
+        ps.write_bytes(DRAFT.read_text(encoding="utf-8").encode("utf-16"))
+        rc, out, err = run_cli(["scp", "test", "shop-dev", "ec2:RunInstances", str(DEMO),
+                                "--resource", "arn:aws:ec2:us-east-1:666666666666:instance/*",
+                                "--region", "us-east-1", "--context", "ec2:InstanceType=m5.large",
+                                "--draft", str(ps), "--attach", "Workloads"])
+        self.assertEqual(rc, sc.EXIT_DENIED, err)
+        self.assertIn("Blocked by the draft SCP", out)
 
     def test_save_from_a_state(self):
         path = Path(tempfile.mkdtemp(dir=TMP)) / "snap.json"

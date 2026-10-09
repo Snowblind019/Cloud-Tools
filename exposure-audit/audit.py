@@ -355,7 +355,16 @@ def check_iam(ctx, region):
             out.append(Finding("low", "No IAM password policy", "account setting",
                                "IAM users can set short passwords.",
                                "Set a password policy, or move people to IAM Identity Center."))
-    out += _credential_report(iam)
+    try:
+        out += _credential_report(iam)
+    except Exception as exc:  # noqa: BLE001
+        if not is_access_denied(exc):
+            raise
+        # Keep the root findings above, and say what wasn't checked
+        out.append(Finding("info", "Couldn't read the credential report", "credential report",
+                           error_text(exc, ctx.profile) + ". Console users without MFA and "
+                           "old or unused access keys weren't checked.",
+                           "Allow iam:GenerateCredentialReport and iam:GetCredentialReport."))
     return out
 
 

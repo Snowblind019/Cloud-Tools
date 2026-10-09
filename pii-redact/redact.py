@@ -24,8 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from .common import (CONFIG_DIR, VERSION, ClipboardError, notify, read_clipboard,
-                     write_atomic, write_clipboard)
+from .common import (CONFIG_DIR, VERSION, ClipboardError, keep_unreadable, notify,
+                     read_clipboard, write_atomic, write_clipboard)
 
 CONFIG_FILE = CONFIG_DIR / "redact.json"
 _CONFIG_HOME = CONFIG_DIR.parent
@@ -415,6 +415,10 @@ KV_RE = re.compile(
 )
 VALUE_WORD = re.compile(r"""(?:[^\s,;{}\[\]"'\\]|\\(?![nrt"']))"""
                         r"""(?:[^\s,;{}\[\]()#"'\\]|\\(?![nrt"']))*""")
+# More words of a name after the first one, like Doe in Owner: Jane Doe. Only words that
+# start with a capital and have a small letter count, so a log line like user: admin
+# logged in keeps its words, and one that's the next key (Env=prod) ends it.
+NAME_MORE = re.compile(r"[ \t]+(?=[^\W\d_])(?:[\w'\u2019-]*\w)(?![\w'\u2019-])(?![ \t]*[:=])")
 # Terraform's "old" -> "new"
 ARROW = re.compile(r"""[ \t]*->[ \t]*(?P<q>["'])(?P<qval>(?:(?!(?P=q))(?:\\.|[^\\\n]))*)(?P=q)""")
 # --password SECRET and similar command line flags, with a space instead of =
@@ -509,8 +513,20 @@ def _secret_end(text, m):
             end -= 1
         return end
     query = m.group("sep") == "=" and text[key_start - 1:key_start] in ("?", "&")
-    word = (QUERY_WORD if query else SECRET_WORD).match(text, start).group()
-    return start + len(_trim_closers(word))
+    # An empty query value (?token=&next=1) has no word at all
+    word = (QUERY_WORD if query else SECRET_WORD).match(text, start)
+    return start + len(_trim_closers(word.group() if word else ""))
+
+
+def _name_end(text, end):
+    """Where an unquoted name ends: Owner: Jane Doe takes Doe too, up to four more words."""
+    for _ in range(4):
+        m = NAME_MORE.match(text, end)
+        word = m.group().lstrip(" \t") if m else ""
+        if not (word[:1].isupper() and any(c.islower() for c in word)):
+            break
+        end = m.end()
+    return end
 
 
 def kv_spans(text, prio, placeholder):
@@ -543,7 +559,8 @@ def kv_spans(text, prio, placeholder):
                         found.append((value_start, end))
                 # jsonencode(...) and other function calls aren't data
                 elif text[word_end:word_end + 1] != "(" and ok(word, False, placeholder):
-                    found.append((value_start, word_end))
+                    found.append((value_start, _name_end(text, word_end) if hit[0] == "names"
+                                  else word_end))
             arrow = ARROW.match(text, word_end)
             if arrow and ok(arrow.group("qval"), True, placeholder):
                 found.append(arrow.span("qval"))
@@ -715,7 +732,8 @@ def load_config():
                 source = STANDALONE_CONFIG_FILE  # from when PII Redact was its own app
             elif LEGACY_CONFIG_FILE.exists():
                 source = LEGACY_CONFIG_FILE  # from the old pii-redactor name
-        data = json.loads(source.read_text(encoding="utf-8"))
+        # utf-8-sig: a file saved from Notepad or PowerShell can start with a byte order mark
+        data = json.loads(source.read_text(encoding="utf-8-sig"))
     except FileNotFoundError:
         # First run: pick up words from the older text file, or start with username and hostname
         try:
@@ -729,7 +747,8 @@ def load_config():
         return cfg
     if not isinstance(data, dict):
         return cfg
-    for cid, value in (data.get("categories") or {}).items():
+    categories = data.get("categories")
+    for cid, value in (categories.items() if isinstance(categories, dict) else ()):
         if cid in cfg["categories"] and isinstance(value, bool):
             cfg["categories"][cid] = value
     for key in ("numbered", "copy_on_paste", "copy_in_terminal"):
@@ -746,6 +765,7 @@ def load_config():
 def save_config(cfg) -> bool:
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        keep_unreadable(CONFIG_FILE)
         # The word lists can hold names and employers, so only the owner can read it
         write_atomic(CONFIG_FILE, json.dumps(cfg, indent=2) + "\n", mode=0o600)
         return True
@@ -812,13 +832,22 @@ def stdin_has_data():
     return stat.S_ISFIFO(mode) or stat.S_ISREG(mode)
 
 
+def read_stdin():
+    """Everything piped in. A byte that isn't valid text shows as the replacement
+    character, the same as in files, instead of stopping with UnicodeDecodeError."""
+    buf = getattr(sys.stdin, "buffer", None)
+    if buf is None:
+        return sys.stdin.read()
+    return buf.read().decode(sys.stdin.encoding or "utf-8", errors="replace")
+
+
 def read_files(paths):
     if not paths or paths == ["-"]:
-        return sys.stdin.read()
+        return read_stdin()
     parts = []
     for p in paths:
         try:
-            parts.append(sys.stdin.read() if p == "-" else
+            parts.append(read_stdin() if p == "-" else
                          Path(p).read_text(encoding="utf-8", errors="replace"))
         except OSError as exc:
             sys.exit(f"pii-redact: {exc}")
@@ -877,6 +906,10 @@ def cmd_run(command, cfg, args):
     except FileNotFoundError:
         print(f"pii-redact: command not found: {command[0]}", file=sys.stderr)
         return 127
+    except OSError as exc:
+        # Not executable, a folder, or a file that isn't a program
+        print(f"pii-redact: can't run {command[0]}: {exc.strerror or exc}", file=sys.stderr)
+        return 126
     except KeyboardInterrupt:
         return 130
     emit(proc.stdout.decode("utf-8", errors="replace"), cfg, args)

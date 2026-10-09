@@ -98,6 +98,17 @@ class RedactTests(unittest.TestCase):
         self.assertEqual(r.stdout, "ip [Redacted]")
         self.assertIn("Redacted 1", r.stderr)
 
+    def test_piped_text_that_isnt_utf8(self):
+        # With a UTF-8 locale, one Latin-1 byte in piped output stopped pii-redact with
+        # UnicodeDecodeError. Files already read past it.
+        import subprocess
+        env = dict(os.environ, PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8:strict")
+        r = subprocess.run([sys.executable, "-m", "awskit", "redact"],
+                           input=b"ip 54.201.33.17 caf\xe9\n", capture_output=True, env=env,
+                           cwd=ROOT)
+        self.assertEqual(r.returncode, 0, r.stderr.decode(errors="replace"))
+        self.assertEqual(r.stdout.decode("utf-8"), "ip [Redacted] caf�\n")
+
 
 class PolicyTests(unittest.TestCase):
     def titles(self, text, kind=None):
@@ -154,6 +165,123 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(iampolicy.PolicyError):
             iampolicy.load_policy('{"Statement": [')
 
+    def test_policy_file_saved_by_windows_powershell(self):
+        # Windows PowerShell 5.1 saves aws ... > policy.json as UTF-16, and Notepad can put
+        # a byte order mark first. awskit policy FILE couldn't read either.
+        import contextlib
+        from awskit import cli
+        doc = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}\r\n'
+        folder = Path(tempfile.mkdtemp(dir=TMP))
+        for name, data in (("utf16.json", b"\xff\xfe" + doc.encode("utf-16-le")),
+                           ("bom.json", b"\xef\xbb\xbf" + doc.encode()),
+                           ("plain.json", doc.encode())):
+            (folder / name).write_bytes(data)
+            out, errs = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(errs):
+                code = cli.main(["policy", str(folder / name), "--json"])
+            self.assertEqual(code, 0, errs.getvalue())
+            self.assertIn("Full admin access", out.getvalue(), name)
+
+    def test_values_that_arent_text_dont_crash(self):
+        # A number or list where IAM wants text: AWS turns the policy away, but a pasted
+        # draft or a policy in a Terraform plan can still have one.
+        doc, _ = iampolicy.load_policy(json.dumps({"Statement": [
+            {"Sid": 1, "Effect": "Allow", "Principal": "*", "Action": [1, "s3:GetObject"],
+             "Resource": "*"},
+            {"Sid": 1, "Effect": "Allow", "Action": "s3:PutObject", "Resource": "*"},
+            {"Sid": ["x"], "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "*"},
+            {"Sid": ["x"], "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "*"}]}))
+        self.assertEqual(iampolicy.detect_kind(doc), "resource")
+        found = {f.title: f.detail for f in iampolicy.analyze(doc)}
+        self.assertIn("Open to everyone", found)
+        self.assertEqual(found["Duplicate Sid"], "1, ['x']")
+        doc, _ = iampolicy.load_policy("{'Statement': [{'Effect': 'Allow', 'Principal': '*', "
+                                       "'Action': 's3:GetObject', 'Resource': '*', "
+                                       "'Condition': {'StringEquals': {1: 'x'}}}]}")
+        self.assertIn("Public principal with a weak condition",
+                      {f.title for f in iampolicy.analyze(doc)})
+
+    def test_files_saved_on_windows(self):
+        # Notepad can save UTF-8 with a byte order mark, and Windows PowerShell 5.1 writes
+        # UTF-16 with one for aws iam get-policy-version ... > policy.json.
+        text = load_example("tight-policy.json")
+        self.assertEqual(iampolicy.load_policy("\ufeff" + text)[0]["Statement"][0]["Sid"],
+                         "ReadArtifacts")
+        for data in (text.encode("utf-8"), text.encode("utf-8-sig"), text.encode("utf-16"),
+                     b"\xfe\xff" + text.encode("utf-16-be")):
+            self.assertEqual(iampolicy.decode_text(data), text)
+            self.assertEqual(iampolicy.json_text(data), text)
+        self.assertIsNone(iampolicy.json_text(b"PK\x03\x04 a saved plan is a zip file"))
+        self.assertIsNone(iampolicy.json_text("[1]".encode("utf-16")))
+
+    def test_page_opens_files_from_windows(self):
+        # Open file on the Policy Check page used to say "'utf-8' codec can't decode byte
+        # 0xff" for PowerShell's UTF-16, and "Unexpected UTF-8 BOM" for Notepad's UTF-8.
+        import subprocess
+        try:
+            import gi
+            gi.require_version("Gtk", "4.0")
+        except (ImportError, ValueError):
+            self.skipTest("GTK 4 for Python isn't installed")
+        folder = Path(tempfile.mkdtemp(prefix="policy-page-", dir=TMP))
+        text = load_example("risky-policy.json")
+        (folder / "ps.json").write_bytes(text.encode("utf-16"))
+        (folder / "notepad.json").write_bytes(text.replace("\n", "\r\n").encode("utf-8-sig"))
+        (folder / "check.py").write_text(r'''
+import json, os, sys
+root, folder = sys.argv[1:3]
+os.environ["XDG_CONFIG_HOME"] = folder
+sys.path.insert(0, root)
+import gi
+gi.require_version("Gtk", "4.0")
+from gi.repository import GLib
+from awskit import app, policy_page
+msgs, out = [], []
+policy_page.show_message = lambda parent, heading, body="": msgs.append(f"{heading}: {body}")
+a = app.App(page="policy")
+names = ["ps.json", "notepad.json"]
+state = {"opened": 0}
+
+def step():
+    p = a.get_active_window().pages["policy"]
+    if state["opened"] == len(out) < len(names):
+        p.buffer.set_text("")
+        p.load_file(os.path.join(folder, names[len(out)]))
+        state["opened"] += 1
+        return True
+    if len(out) < len(names):
+        if p.text() and p.result.get_text().startswith("Paste"):
+            return True                      # still checking
+        out.append([p.result.get_text(), "\r" in p.text()])
+        return True
+    print(json.dumps({"out": out, "msgs": msgs}))
+    a.quit()
+    return False
+
+def start():
+    if a.get_active_window() is None:
+        return True
+    GLib.timeout_add(500, step)
+    return False
+GLib.timeout_add(200, start)
+GLib.timeout_add(60000, a.quit)
+a.run([])
+''', encoding="utf-8")
+        cmd = [sys.executable, str(folder / "check.py"), str(ROOT), str(folder)]
+        if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+            if not shutil.which("xvfb-run"):
+                self.skipTest("no display and no xvfb-run")
+            cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24"] + cmd
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        lines = [x for x in r.stdout.splitlines() if x.startswith("{")]
+        self.assertTrue(lines, r.stdout[-2000:] + r.stderr[-2000:])
+        got = json.loads(lines[-1])
+        self.assertEqual(got["msgs"], [])
+        self.assertEqual(len(got["out"]), 2)
+        for result, has_cr in got["out"]:
+            self.assertIn("Identity policy:", result)
+            self.assertFalse(has_cr)
+
 
 class PlanTests(unittest.TestCase):
     def setUp(self):
@@ -193,6 +321,73 @@ class PlanTests(unittest.TestCase):
                        "after": {"policy": pol, "description": "b"}, "after_unknown": {}}}]}
         self.assertEqual(tfplan.summarize(plan).risks, [])
 
+    def test_policy_with_number_sids_doesnt_sink_the_plan(self):
+        # jsonencode with Sid = 1 plans fine (AWS only turns it away at apply).
+        pol = json.dumps({"Version": "2012-10-17", "Statement": [
+            {"Sid": 1, "Effect": "Allow", "Action": "*", "Resource": "*"},
+            {"Sid": 1, "Effect": "Allow", "Action": "s3:GetObject", "Resource": "*"}]})
+        plan = {"format_version": "1.2", "resource_changes": [
+            {"address": "aws_iam_policy.p", "mode": "managed", "type": "aws_iam_policy",
+             "change": {"actions": ["create"], "before": None, "after": {"policy": pol}}},
+            {"address": "aws_s3_bucket.logs", "mode": "managed", "type": "aws_s3_bucket",
+             "change": {"actions": ["delete"], "before": {"bucket": "logs"}, "after": None}}]}
+        found = {(r.address, r.title) for r in tfplan.summarize(plan).risks}
+        self.assertIn(("aws_iam_policy.p", "Full admin access"), found)
+        self.assertIn(("aws_s3_bucket.logs", "Plan destroys the bucket and every object in it"),
+                      found)
+
+    def test_plan_json_saved_on_windows(self):
+        # Windows PowerShell 5.1 writes terraform show -json tfplan > plan.json as UTF-16, and
+        # Notepad can add a byte order mark to UTF-8. Both are plan JSON, not saved plans.
+        text = load_example("sample-plan.json")
+        folder = Path(tempfile.mkdtemp(dir=TMP))
+        for name, data in (("bom.json", text.encode("utf-8-sig")),
+                           ("ps.json", text.encode("utf-16"))):
+            (folder / name).write_bytes(data)
+            plan = tfplan.load_plan(str(folder / name), run_terraform=False)
+            self.assertEqual(tfplan.summarize(plan).counts(), self.summary.counts())
+        self.assertIn("resource_changes", tfplan.load_plan("\ufeff" + text))   # piped in
+        (folder / "tfplan").write_bytes(b"PK\x03\x04 a saved plan is a zip file")
+        with self.assertRaises(tfplan.NeedsTerraform):
+            tfplan.load_plan(str(folder / "tfplan"), run_terraform=False)
+
+    def test_piped_plan_text_isnt_taken_for_a_path(self):
+        # terraform plan | awskit plan: the plan's own text, not JSON. The message used to
+        # repeat all of it as a file name that was too long.
+        text = 'Terraform will perform the following actions:\n  + password = "hunter2"\n' * 60
+        with self.assertRaises(tfplan.PlanError) as cm:
+            tfplan.load_plan(text)
+        self.assertIn("isn't plan JSON", str(cm.exception))
+        self.assertNotIn("hunter2", str(cm.exception))
+
+    def test_terraform_output_is_read_as_utf8(self):
+        # Terraform prints UTF-8, but the locale's encoding (cp1252 on most Windows PCs) was
+        # used to read it. A C locale stands in for that here.
+        import subprocess
+        from unittest import mock
+        if os.name != "nt":
+            folder = Path(tempfile.mkdtemp(dir=TMP))
+            (folder / "out.json").write_text(json.dumps(
+                {"format_version": "1.0", "values": {"owner": "\u0218tefan \u0101"}},
+                ensure_ascii=False), encoding="utf-8")
+            fake = folder / "terraform"
+            fake.write_text('#!/bin/sh\ncat "$(dirname "$0")/out.json"\n', encoding="utf-8")
+            fake.chmod(0o755)
+            code = ("import json, sys; sys.path.insert(0, sys.argv[1]); from awskit import tfplan; "
+                    "print(json.dumps(tfplan.show_state(sys.argv[2])['values']))")
+            env = dict(os.environ, PATH=f"{folder}{os.pathsep}{os.environ.get('PATH', '')}",
+                       LC_ALL="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0")
+            r = subprocess.run([sys.executable, "-c", code, str(ROOT), str(folder)], env=env,
+                               capture_output=True, text=True, timeout=120)
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertEqual(json.loads(r.stdout)["owner"], "\u0218tefan \u0101")
+        # And no console window for it on Windows, where the window runs under pythonw.
+        with mock.patch.object(tfplan.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True), \
+                mock.patch.object(tfplan.subprocess, "Popen", side_effect=OSError("stop")) as popen:
+            with self.assertRaises(tfplan.PlanError):
+                tfplan._run(["terraform", "version"], cwd=TMP)
+        self.assertEqual(popen.call_args.kwargs["creationflags"], 0x08000000)
+
 
 class ProfileTests(unittest.TestCase):
     def test_list_and_switch(self):
@@ -218,6 +413,28 @@ class ProfileTests(unittest.TestCase):
         profiles.set_current_profile(None)
         self.assertIsNone(profiles.current_profile())
         self.assertIn("__awskit_sync", profiles.shell_hook("fish"))
+
+    @unittest.skipIf(os.name == "nt", "pipes and SIGPIPE work differently on Windows")
+    def test_output_into_a_closed_pipe(self):
+        # awskit profile --list | head -1 used to end in a BrokenPipeError traceback
+        import subprocess
+        config = Path(os.environ["AWS_CONFIG_FILE"])
+        saved = config.read_bytes() if config.exists() else None
+        self.addCleanup(lambda: config.write_bytes(saved) if saved is not None else
+                        config.unlink(missing_ok=True))
+        config.write_text("".join(f"[profile p{i}]\nregion = us-east-1\n" for i in range(400)))
+        for argv in (["profile", "--list"], ["shell-init", "bash"]):
+            r, w = os.pipe()
+            os.close(r)                     # the reader is gone before anything is written
+            try:
+                proc = subprocess.run([sys.executable, "-m", "awskit"] + argv, stdout=w,
+                                      stderr=subprocess.PIPE, text=True, cwd=ROOT, timeout=60,
+                                      env=dict(os.environ, PYTHONPATH=str(ROOT)))
+            finally:
+                os.close(w)
+            self.assertNotIn("Traceback", proc.stderr, argv)
+            self.assertNotIn("BrokenPipeError", proc.stderr, argv)
+            self.assertEqual(proc.returncode, 141, argv)
 
 
 @unittest.skipIf(mock_aws is None, "moto not installed")
@@ -292,6 +509,20 @@ class SweepAuditTests(unittest.TestCase):
         self.assertIn(("Unencrypted EBS volume", self.vol), checks)
         self.assertTrue(any(f.check == "Root user has no MFA" for f in findings))
         self.assertEqual(findings, sorted(findings, key=lambda f: audit.SEVERITY_ORDER[f.severity]))
+
+    def test_audit_report_that_cant_be_written_still_shows(self):
+        # A --markdown path in a folder that isn't there used to end in a traceback, and the
+        # whole scan was lost
+        import contextlib
+        from awskit import cli
+        path = Path(TMP) / "no-such-folder" / "audit.md"
+        out, errs = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(errs):
+            code = cli.main(["audit", "-r", "us-east-1", "-c", "open_sg", "--markdown", str(path)])
+        self.assertEqual(code, 1)
+        self.assertIn(f"Couldn't write {path}", errs.getvalue())
+        self.assertIn("# Exposure audit", out.getvalue())
+        self.assertIn(self.sg, out.getvalue())
 
 
 try:
@@ -593,6 +824,55 @@ class ImageEditorTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.folder, "final.jpg")))
         self.assertIn(other, ed.cfg["recent_folders"])
 
+    def account_pass(self):
+        return [[imageredact.Word("123456789012", 20, 20, 120, 14, 95, (0, 1), None)]]
+
+    def test_escape_puts_back_a_shape_being_moved_or_resized(self):
+        ed = self.ed
+        self.draw("cover", (10, 10), (110, 60))
+        ed.unsaved = False
+        ed.set_tool("select")
+        for start, to in (((50, 30), (150, 130)), ((110, 60), (300, 200))):   # move, resize
+            ed.drag_begin(*start, 1.0)
+            ed.drag_update(*to, False, 1.0)
+            ed.escape()
+            ed.drag_update(to[0] + 10, to[1] + 10, False, 1.0)
+            ed.drag_end(1.0)
+            self.assertEqual([ed.shapes[0][k] for k in ("x1", "y1", "x2", "y2")],
+                             [10, 10, 110, 60])
+            self.assertIsNone(ed.selected)
+        self.assertEqual(len(ed.undo_stack), 1)           # only drawing it
+        self.assertFalse(ed.unsaved)
+
+    def test_undoing_a_drag_keeps_boxes_found_during_it(self):
+        ed = self.ed
+        gen = ed.start_finding()
+        self.draw("cover", (200, 200), (300, 260))
+        ed.set_tool("select")
+        ed.drag_begin(250, 230, 1.0)
+        ed.drag_update(260, 240, False, 1.0)
+        ed.found(gen, self.account_pass())             # detection finishes mid-drag
+        ed.drag_update(270, 250, False, 1.0)
+        ed.drag_end(1.0)
+        self.assertEqual(ed.shapes[-1]["x1"], 220)
+        ed.undo()
+        self.assertEqual([(s["kind"], bool(s.get("auto"))) for s in ed.shapes],
+                         [("cover", True), ("cover", False)])
+        self.assertEqual(ed.shapes[-1]["x1"], 200)
+        ed.undo()                                       # then the detected box goes
+        self.assertEqual([s.get("auto") for s in ed.shapes], [None])
+
+    def test_finding_the_same_boxes_again_takes_no_undo_step(self):
+        ed = self.ed
+        ed.found(ed.start_finding(), self.account_pass())
+        self.draw("cover", (200, 200), (300, 260))
+        ed.undo()
+        steps = len(ed.undo_stack)
+        ed.apply_passes()                               # Find PII again, same settings
+        self.assertEqual(len(ed.undo_stack), steps)
+        self.assertTrue(ed.redo())                      # the redo is still there
+        self.assertEqual(len(ed.shapes), 2)
+
 
 class WindowsSupportTests(unittest.TestCase):
     """The Windows-only pieces that can be checked on any system."""
@@ -609,6 +889,38 @@ class WindowsSupportTests(unittest.TestCase):
         self.assertEqual(root.find(".//t:LogonType", ns).text, "InteractiveToken")
         self.assertIn('--profile "R&D"', root.find(".//t:Arguments", ns).text)
         self.assertTrue(root.find(".//t:Command", ns).text.endswith("pythonw.exe"))
+
+    @unittest.skipIf(mock_aws is None, "moto not installed")
+    def test_daily_sweep_runs_under_pythonw(self):
+        # The scheduled task runs pythonw, where sys.stdout and sys.stderr are None. The
+        # sweep stopped at its first sys.stderr.isatty(), so the daily check never ran.
+        from unittest import mock
+        from awskit import cli
+        with mock_aws(), mock.patch.object(sys, "stdout", None), \
+                mock.patch.object(sys, "stderr", None), \
+                mock.patch.object(cli, "notify") as notify:
+            code = cli.main(["sweep", "--notify", "--quiet", "-r", "us-east-1"])
+            for stream in (sys.stdout, sys.stderr):
+                stream.close()
+        self.assertIn(code, (0, 1))
+        notify.assert_called()              # it got as far as telling you
+
+    def test_daily_sweep_time_has_to_be_a_real_time(self):
+        # 25:99 used to be written into the systemd timer or the scheduled task as it was
+        import contextlib
+        from unittest import mock
+        from awskit import cli
+        args = cli.build_parser().parse_args(["sweep"])
+        for at in ("24:00", "9:60", "25:99", "٢١:٠٠", "21", ""):
+            errs = io.StringIO()
+            with mock.patch.object(cli, "_install_windows_task") as task, \
+                    mock.patch.object(cli, "systemd_dir") as unit_dir, \
+                    mock.patch.object(cli.shutil, "which", return_value=None), \
+                    contextlib.redirect_stderr(errs), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.install_timer(at, args), 1, at)
+            task.assert_not_called()
+            unit_dir.assert_not_called()
+            self.assertIn("Give a time like 21:00.", errs.getvalue())
 
     def test_powershell_hook_and_setup_lines(self):
         from awskit import profiles
@@ -630,6 +942,26 @@ class WindowsSupportTests(unittest.TestCase):
                            env=dict(os.environ, PYTHONPATH=str(ROOT)))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("function global:__awskit_sync", r.stdout)
+
+    def test_wsl_gtk_env(self):
+        # WSLg's Wayland side leaves closed menus on screen, so GTK goes through X11 there,
+        # unless GDK_BACKEND is already set. Nothing changes outside WSL.
+        from unittest import mock
+        from awskit import common
+        cases = [(True, {"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0"},
+                  {"GDK_BACKEND": "x11,wayland", "GSK_RENDERER": "cairo"}),
+                 (True, {"DISPLAY": ":0", "GDK_BACKEND": "wayland", "GSK_RENDERER": "ngl"},
+                  {"GDK_BACKEND": "wayland", "GSK_RENDERER": "ngl"}),
+                 (True, {"WAYLAND_DISPLAY": "wayland-0"},
+                  {"GDK_BACKEND": None, "GSK_RENDERER": "cairo"}),
+                 (False, {"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0"},
+                  {"GDK_BACKEND": None, "GSK_RENDERER": None})]
+        for wsl, env, want in cases:
+            with mock.patch.object(common, "is_wsl", lambda: wsl), \
+                    mock.patch.dict(os.environ, env, clear=True):
+                common.prepare_gtk_env()
+                got = {k: os.environ.get(k) for k in want}
+            self.assertEqual(got, want, (wsl, env))
 
     def test_windows_launcher_needs_an_install(self):
         from awskit import cli
@@ -878,6 +1210,82 @@ class CloudMapTests(unittest.TestCase):
         self.assertIn("(known after apply)", web.caption)
         self.assertEqual(snap.scanned_at, "2026-10-01T10:00:00Z")
 
+    def test_plan_with_module_instances_links_inside_each_one(self):
+        """In a module with for_each or count, a subnet's vpc_id = aws_vpc.this.id is the VPC
+        of the same module instance. Those references used to find nothing, so the subnets
+        of module.net["prod"] weren't in any VPC."""
+        from awskit import maptf
+
+        def plan(keys):
+            resources, changes, children = [], [], []
+            for key in keys:
+                mod = f"module.net{key}"
+                rs = [{"address": f"{mod}.aws_vpc.this", "mode": "managed", "type": "aws_vpc",
+                       "name": "this", "values": {"cidr_block": "10.0.0.0/16"}},
+                      {"address": f"{mod}.aws_subnet.a", "mode": "managed", "type": "aws_subnet",
+                       "name": "a", "values": {"cidr_block": "10.0.1.0/24",
+                                               "availability_zone": "us-east-2a"}}]
+                children.append({"address": mod, "resources": rs})
+                changes += [{"address": f"{mod}.aws_vpc.this", "change": {"after_unknown": {"id": True}}},
+                            {"address": f"{mod}.aws_subnet.a",
+                             "change": {"after_unknown": {"id": True, "vpc_id": True}}}]
+            return {"format_version": "1.2", "terraform_version": "1.9.8",
+                    "planned_values": {"root_module": {"child_modules": children}},
+                    "resource_changes": changes,
+                    "configuration": {"root_module": {"module_calls": {"net": {"module": {"resources": [
+                        {"address": "aws_vpc.this", "expressions": {}},
+                        {"address": "aws_subnet.a", "expressions": {
+                            "vpc_id": {"references": ["aws_vpc.this.id", "aws_vpc.this"]}}}]}}}}}}
+        for keys in (['["prod"]', '["dev"]'], ["[0]", "[1]"], [""]):
+            snap = maptf.build(plan(keys), "plan.json")
+            for key in keys:
+                self.assertEqual(snap.vpc_of(snap.get(f"module.net{key}.aws_subnet.a")),
+                                 f"module.net{key}.aws_vpc.this", keys)
+
+    def test_json_from_windows_with_a_byte_order_mark(self):
+        """PowerShell 5.1's > writes UTF-16, and Out-File -Encoding utf8 writes a UTF-8 BOM.
+        Those files used to be taken for saved binary plans, so map tf and map reach ran
+        terraform show on them (or said Terraform isn't installed)."""
+        from unittest import mock
+        from awskit import cloudmap, maptf
+        text = (MAP_EXAMPLES / "two-az-vpc-state.json").read_text(encoding="utf-8")
+        folder = Path(tempfile.mkdtemp(dir=TMP))
+        for enc in ("utf-8-sig", "utf-16", "utf-16-be"):
+            path = folder / f"state-{enc}.json"
+            data = text.encode(enc)
+            if enc == "utf-16-be":
+                data = b"\xfe\xff" + data
+            path.write_bytes(data)
+            with mock.patch.object(tfplan, "show_json", side_effect=AssertionError("ran terraform")):
+                snap = maptf.read([str(path)])
+                self.assertEqual(len(snap.of_kind("subnet")), 4, enc)
+                self.assertEqual(len(cloudmap.load_input(path).of_kind("subnet")), 4, enc)
+        bad = folder / "bad.json"
+        bad.write_bytes(b"\xef\xbb\xbf{not json")
+        with self.assertRaises(maptf.TfError):
+            maptf.read([str(bad)])
+
+    def test_tf_on_the_current_folder_is_named_after_it(self):
+        """awskit map tf . used to write a hidden .cloudmap.json, since Path(".").name is empty."""
+        from unittest import mock
+        from awskit import cloudmap
+        from awskit import mapmodel as mm
+        data = json.loads((MAP_EXAMPLES / "two-az-vpc-state.json").read_text(encoding="utf-8"))
+        folder = Path(tempfile.mkdtemp(dir=TMP)) / "network"
+        folder.mkdir()
+        here = os.getcwd()
+        out = io.StringIO()
+        try:
+            os.chdir(folder)
+            with mock.patch.object(tfplan, "show_state", return_value=data), \
+                    mock.patch("sys.stdout", out), mock.patch("sys.stderr", io.StringIO()):
+                self.assertEqual(cloudmap.main(["tf", "."]), 0)
+        finally:
+            os.chdir(here)
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ["network.cloudmap.json"])
+        snap = mm.Snapshot.load(folder / "network.cloudmap.json")
+        self.assertEqual(snap.scope["inputs"], ["network"])
+
     def test_raw_tfstate_and_unmapped_types(self):
         from awskit import maptf
         raw = {"version": 4, "terraform_version": "1.9.8", "serial": 3, "lineage": "x", "resources": [
@@ -909,6 +1317,29 @@ class CloudMapTests(unittest.TestCase):
         self.assertEqual(more[0].title_lines, ["+8 more instances"])
         self.assertIn("box-19", json.dumps(more[0].tooltip))
         self.assertEqual(sum(1 for b in lay.boxes if b.kind == "instance" and b.role == "card"), 12)
+
+    def test_labels_file_saved_with_a_byte_order_mark(self):
+        """Notepad and PowerShell can start labels.json with a BOM, which used to stop every
+        export with "Couldn't read labels file"."""
+        from awskit import cloudmap, maplayoutmem
+        path = Path(tempfile.mkdtemp(dir=TMP)) / "labels.json"
+        path.write_bytes(b"\xef\xbb\xbf" + json.dumps({"vpc-1": "Where the lab lives"}).encode())
+        self.assertEqual(cloudmap.load_labels(path)["vpc-1"], "Where the lab lives")
+        self.assertEqual(maplayoutmem._read_labels(path), {"vpc-1": "Where the lab lives"})
+
+    def test_names_with_control_characters_stay_well_formed(self):
+        """EC2 takes any character in a tag. One control character in a name used to make the
+        whole .drawio file unreadable, for draw.io and for layout memory."""
+        import xml.etree.ElementTree as ET
+        from awskit import mapmodel as mm
+        snap = mm.Snapshot("aws")
+        mm.add_vpc(snap, "vpc-1", "111122223333", "us-east-1", ["10.0.0.0/16"], "lab\x0bnet")
+        mm.add_subnet(snap, "subnet-1", "vpc-1", "us-east-1a", "10.0.1.0/24", "app\x1b[0m")
+        mm.add_instance(snap, "i-1", "subnet-1", "vpc-1", "web\x08server", tags={"Owner": "a\x00b"})
+        mm.finish(snap)
+        for redacted in (False, True):
+            ET.fromstring(map_export(snap, "network", redacted=redacted)[0])
+        self.assertIn("webserver", map_export(snap, "network")[0])
 
     def test_layout_snaps_to_the_grid_and_text_fits(self):
         from awskit import maplayout
@@ -1226,6 +1657,34 @@ class CloudMapViewerTests(unittest.TestCase):
         self.assertEqual(icons.error, "")
         for name in set(mapdrawio.SHAPES.values()) | set(mapdrawio.GROUP_ICONS.values()):
             self.assertIn(name, icons, name)
+
+    def test_files_wait_for_icons_still_loading(self):
+        import threading
+        import time
+        from awskit import mapdrawio, mapicons, maprender
+        folder = fake_drawio(Path(tempfile.mkdtemp(prefix="awskit-icons-")) / "drawio")
+        try:
+            names = set(mapdrawio.SHAPES.values()) | set(mapdrawio.GROUP_ICONS.values())
+            (folder / "stencils" / "aws4.xml").write_text(
+                '<shapes name="mxgraph.aws4">' + "".join(
+                    f'<shape name="{n}" w="10" h="10" aspect="fixed"><foreground><rect x="0" '
+                    'y="0" w="10" h="10"/><fill/></foreground></shape>' for n in names) +
+                "</shapes>")
+            lay = self.layout("network")
+            want = maprender.render_png(lay, "dark", scale=1.0, icons=mapicons.IconSet(folder))
+            # The viewer loads the icons in the background. An export made meanwhile gets
+            # the real icons, not the stand-ins the viewer draws until they're in.
+            icons = mapicons.IconSet(folder)
+            started = threading.Event()
+            icons._from_cache = lambda: (started.set(), time.sleep(0.5), None)[2]
+            loader = threading.Thread(target=icons.load)
+            loader.start()
+            self.assertTrue(started.wait(5))
+            got = maprender.render_png(lay, "dark", scale=1.0, icons=icons)
+            loader.join()
+            self.assertTrue(got == want, "the export has the stand-in icons")
+        finally:
+            shutil.rmtree(folder.parent)
 
     def test_maps_draw_without_icons(self):
         from awskit import mapicons, maprender
@@ -1705,6 +2164,37 @@ class CloudMapBridgeTests(unittest.TestCase):
         self.assertEqual(exits, [{"saved": False, "reason": "closed"}])
         self.assertFalse(b.running())
 
+    def test_closing_one_of_two_editor_windows_keeps_the_session(self):
+        import http.client
+        import time
+        from awskit import mapeditor
+        exits = []
+        b = mapeditor.Bridge(self.file, drawio=self.drawio, on_exit=exits.append, idle_timeout=30)
+        b.start()
+
+        def post(path, body):
+            conn = http.client.HTTPConnection("127.0.0.1", b.port, timeout=5)
+            conn.request("POST", f"/{b.token}/{path}", body=body,
+                         headers={"Host": f"127.0.0.1:{b.port}"})
+            conn.getresponse().read()
+            conn.close()
+        try:
+            # Open in draw.io pressed twice: two windows on the same session.
+            post("event", '{"event": "loaded", "page": "first"}')
+            post("alive", '{"loaded": true, "page": "second"}')
+            post("closed", '{"page": "first"}')
+            time.sleep(5.5)                       # longer than the last window's few seconds
+            self.assertEqual(exits, [])
+            self.assertTrue(b.running())         # the second window can still save
+            post("closed", '{"page": "second"}')
+            for _ in range(80):
+                if exits:
+                    break
+                time.sleep(0.1)
+            self.assertEqual(exits, [{"saved": False, "reason": "closed"}])
+        finally:
+            b.stop()
+
 
 class CloudMapEditCommandTests(unittest.TestCase):
     """awskit map edit: the bridge from the terminal, saved to through HTTP the way the
@@ -1912,6 +2402,7 @@ DESIGNS = ROOT / "cloud-map" / "examples"
 BROKEN_DESIGNS = {
     "arrow-not-between-groups": "has to connect two security groups",
     "bad-cidr": "10.0.0.0/33 isn't a valid CIDR block",
+    "bad-description": "the description won't work, AWS doesn't allow – in it",
     "bad-security-group-rule": "ports 99999 have to be between 0 and 65535",
     "duplicate-names": 'Two subnets are called "private-a"',
     "missing-zone": "has no availability zone",
@@ -2087,6 +2578,39 @@ class CloudMapDesignerTests(unittest.TestCase):
         self.assertEqual(mapdesign.name_prefix_of("My Lab!"), "my-lab")
         self.assertEqual(mapdesign.name_prefix_of("sg-net"), "net-sg-net")
         self.assertEqual(mapdesign.hcl_string("a ${b} %{c}"), '"a $${b} %%{c}"')
+
+    def test_descriptions_aws_refuses_are_errors(self):
+        """AWS only takes a-z, A-Z, 0-9, spaces and ._-:/()#,@[]+=&;{}!$* in security group
+        and rule descriptions. Anything else passed check, validate and plan, then failed at
+        apply. The default description is made from the design's name, so it leaves those out."""
+        from awskit import mapdesign as md
+        cells = md.shape_cells("vpc", "vpc", 40, 90, 760, 440, {"name": "main", "cidr": "10.0.0.0/16"})
+        cells += md.shape_cells("subnet", "s", 20, 60, 340, 200, {"name": "private-a", "cidr": "10.0.11.0/24",
+                                                                   "az": "a", "type": "private"}, parent="vpc")
+        cells += md.shape_cells("sg", "web", 400, 60, settings={
+            "name": "web", "description": "", "ingress": "tcp 443 10.0.0.0/8 # from the office’s VPN"},
+            parent="vpc")
+        cells += md.shape_cells("sg", "db", 400, 200, settings={
+            "name": "db", "description": "Base de données – prod", "ingress": ""}, parent="vpc")
+        cells.append(md.arrow_cell("web-db", "web", "db", {"protocol": "tcp", "ports": "5432",
+                                                           "description": "app\tto db"}))
+        path = self.dir / "Snowy's lab.drawio"
+        path.write_text(md.design_xml("Snowy's lab", "us-west-2", cells=cells), encoding="utf-8")
+        errs = [p.message for p in md.errors(md.check(md.read(path)))]
+        self.assertEqual(len(errs), 3, errs)
+        self.assertIn("description won't work, AWS doesn't allow é – in it", errs[0])
+        self.assertIn("ingress: the description of tcp 443 10.0.0.0/8 won't work", errs[1])
+        self.assertIn("U+0009", errs[2])
+        with self.assertRaises(md.DesignError):
+            md.build(md.read(path), self.dir / "out", fmt=False)
+        # Fixed, it builds, and the default description has nothing AWS refuses.
+        text = path.read_text(encoding="utf-8").replace("Base de données – prod", "").replace(
+            " # from the office’s VPN", "").replace("app&#9;to db", "app to db")
+        path.write_text(text, encoding="utf-8")
+        self.assertEqual(md.errors(md.check(md.read(path))), [])
+        md.build(md.read(path), self.dir / "out", fmt=False)
+        main = (self.dir / "out" / "examples" / "basic" / "main.tf").read_text()
+        self.assertIn('"web, from the Snowys lab design"', main)
 
     def test_a_new_design_and_the_library(self):
         import importlib.util
@@ -2639,6 +3163,23 @@ class SecurityReviewTests(unittest.TestCase):
         sec = maplayoutmem.load(side)["maps"]["network"]
         self.assertEqual(list(sec["nodes"]), ["b"])
         self.assertEqual(sec["edges"], {})
+        # Parts of the wrong kind stopped every export with a ValueError.
+        side.write_text(json.dumps({"format": maplayoutmem.FORMAT, "maps": {
+            "access": [1, 2],
+            "network": {"nodes": [], "edges": "x", "styles": "fillColor=#FF0000",
+                        "extra": {"a": 1}},
+            "combined": {"styles": {"a": "x", "b": {"fillColor": "#FF0000"}},
+                         "extra": [7, "<mxCell id=\"n\"/>"]}}}))
+        memory = maplayoutmem.load(side)
+        self.assertEqual(sorted(memory["maps"]), ["combined", "network"])
+        self.assertEqual(memory["maps"]["network"],
+                         {"nodes": {}, "edges": {}, "styles": {}, "extra": []})
+        self.assertEqual(memory["maps"]["combined"]["styles"], {"b": {"fillColor": "#FF0000"}})
+        self.assertEqual(memory["maps"]["combined"]["extra"], ['<mxCell id="n"/>'])
+        from awskit import cloudmap
+        snap = map_snapshot("two-az-vpc-state.json")
+        for map_type in ("network", "access", "combined"):
+            cloudmap.export(snap, map_type, memory=memory)
 
     def test_odd_styles_dont_break_rendering(self):
         from awskit import maprender
@@ -2716,6 +3257,30 @@ class SecurityReviewTests(unittest.TestCase):
                                capture_output=True, text=True, timeout=60)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("awskit", r.stdout)
+
+    @unittest.skipIf(os.name == "nt" or not shutil.which("bash"), "needs bash")
+    def test_install_sh_takes_a_drawio_path_from_where_you_are(self):
+        # install.sh changes to the repo folder first, so a relative --drawio-zip path used
+        # to be looked for there instead of in the folder you ran it from
+        import subprocess
+        stub = self.dir / "stub"
+        stub.mkdir()
+        (stub / "python3").write_text('#!/bin/sh\n[ "$1" = "-m" ] && printf "%s\\n" "$@"\nexit 0\n')
+        (stub / "python3").chmod(0o755)
+        here = self.dir / "Downloads"
+        here.mkdir()
+        env = dict(os.environ, PATH=f"{stub}{os.pathsep}/usr/bin{os.pathsep}/bin", DISPLAY="",
+                   WAYLAND_DISPLAY="", WSL_DISTRO_NAME="")
+        for argv, want in ((["--drawio-zip", "draw.war"], ["--drawio-zip", f"{here}/draw.war"]),
+                           (["--drawio-zip=sub/draw.war", "--no-drawio"],
+                            [f"--drawio-zip={here}/sub/draw.war", "--no-drawio"]),
+                           (["--drawio-zip", "/abs/draw.war"], ["--drawio-zip", "/abs/draw.war"]),
+                           ([], [])):
+            r = subprocess.run(["bash", str(ROOT / "install.sh")] + argv, cwd=here, env=env,
+                               capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout.splitlines()[-len(want) - 3:],
+                             ["-m", "awskit", "install"] + want, r.stdout)
 
     def test_timer_lines_and_csv_cells_are_quoted(self):
         from awskit import cli

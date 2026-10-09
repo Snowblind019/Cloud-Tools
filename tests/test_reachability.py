@@ -1330,6 +1330,101 @@ class TerraformTests(unittest.TestCase):
         self.assertEqual(hop(r, "nacl-in").status, "unknown")
         self.assertIn("aren't known until Terraform applies", hop(r, "nacl-in").reason)
 
+    def test_plan_with_inline_routes_to_gateways_made_in_the_same_plan(self):
+        """The plan leaves out an inline route's target when it's only known after apply
+        (gateway_id of a new internet gateway). The route used to be dropped, so a public
+        subnet came out with no internet route and reachability said blocked."""
+        from awskit import maptf
+
+        def res(addr, values):
+            rtype, name = addr.split(".")
+            return {"address": addr, "mode": "managed", "type": rtype, "name": name, "values": values}
+
+        def cfg(addr, expressions):
+            rtype, name = addr.split(".")
+            return {"address": addr, "mode": "managed", "type": rtype, "name": name,
+                    "provider_config_key": "aws", "expressions": expressions}
+
+        def ref(addr):
+            return {"references": [addr + ".id", addr]}
+        targets = {k: "" for k in ("carrier_gateway_id", "core_network_arn", "egress_only_gateway_id",
+                                   "local_gateway_id", "nat_gateway_id", "network_interface_id",
+                                   "transit_gateway_id", "vpc_endpoint_id", "vpc_peering_connection_id")}
+        world = dict(targets, cidr_block="0.0.0.0/0", ipv6_cidr_block="", destination_prefix_list_id="")
+        plan = {"format_version": "1.2", "terraform_version": "1.9.8",
+                "planned_values": {"root_module": {"resources": [
+                    res("aws_vpc.main", {"cidr_block": "10.9.0.0/16"}),
+                    res("aws_subnet.pub", {"cidr_block": "10.9.1.0/24", "availability_zone": "us-east-2a"}),
+                    res("aws_subnet.other", {"cidr_block": "10.9.2.0/24", "availability_zone": "us-east-2a"}),
+                    res("aws_internet_gateway.gw", {}),
+                    res("aws_route_table.pub", {"route": [world]}),
+                    res("aws_route_table_association.pub", {}),
+                    # The VPC's main route table, adopted: it serves subnets with no association.
+                    res("aws_default_route_table.main", {"route": [world]}),
+                    res("aws_security_group.web", {"name": "web", "ingress": [], "egress": [
+                        {"protocol": "-1", "from_port": 0, "to_port": 0, "cidr_blocks": ["0.0.0.0/0"]}]}),
+                    res("aws_instance.web", {"associate_public_ip_address": True}),
+                    res("aws_instance.other", {"associate_public_ip_address": True})]}},
+                "resource_changes": [
+                    {"address": "aws_vpc.main", "change": {"after_unknown": {"id": True, "arn": True}}},
+                    {"address": "aws_subnet.pub", "change": {"after_unknown": {"id": True, "vpc_id": True}}},
+                    {"address": "aws_subnet.other", "change": {"after_unknown": {"id": True, "vpc_id": True}}},
+                    {"address": "aws_internet_gateway.gw", "change": {"after_unknown": {"id": True, "vpc_id": True}}},
+                    {"address": "aws_route_table.pub", "change": {"after_unknown": {
+                        "id": True, "vpc_id": True, "route": [{"gateway_id": True}]}}},
+                    {"address": "aws_route_table_association.pub", "change": {"after_unknown": {"id": True}}},
+                    {"address": "aws_default_route_table.main", "change": {"after_unknown": {
+                        "id": True, "vpc_id": True, "route": [{"gateway_id": True}]}}},
+                    {"address": "aws_security_group.web", "change": {"after_unknown": {"id": True, "vpc_id": True}}},
+                    {"address": "aws_instance.web", "change": {"after_unknown": {
+                        "id": True, "subnet_id": True, "private_ip": True, "public_ip": True,
+                        "vpc_security_group_ids": True}}},
+                    {"address": "aws_instance.other", "change": {"after_unknown": {
+                        "id": True, "subnet_id": True, "private_ip": True, "public_ip": True,
+                        "vpc_security_group_ids": True}}}],
+                "configuration": {"provider_config": {"aws": {"name": "aws", "expressions": {
+                    "region": {"constant_value": "us-east-2"}}}},
+                    "root_module": {"resources": [
+                        cfg("aws_vpc.main", {}),
+                        cfg("aws_subnet.pub", {"vpc_id": ref("aws_vpc.main")}),
+                        cfg("aws_subnet.other", {"vpc_id": ref("aws_vpc.main")}),
+                        cfg("aws_internet_gateway.gw", {"vpc_id": ref("aws_vpc.main")}),
+                        cfg("aws_route_table.pub", {"vpc_id": ref("aws_vpc.main"),
+                                                    "route": ref("aws_internet_gateway.gw")}),
+                        cfg("aws_route_table_association.pub", {"subnet_id": ref("aws_subnet.pub"),
+                                                                "route_table_id": ref("aws_route_table.pub")}),
+                        cfg("aws_default_route_table.main", {
+                            "default_route_table_id": {"references": ["aws_vpc.main.default_route_table_id",
+                                                                      "aws_vpc.main"]},
+                            "route": ref("aws_internet_gateway.gw")}),
+                        cfg("aws_security_group.web", {"vpc_id": ref("aws_vpc.main")}),
+                        cfg("aws_instance.web", {"subnet_id": ref("aws_subnet.pub"),
+                                                 "vpc_security_group_ids": ref("aws_security_group.web")}),
+                        cfg("aws_instance.other", {"subnet_id": ref("aws_subnet.other"),
+                                                   "vpc_security_group_ids": ref("aws_security_group.web")})]}}}
+        snap = maptf.build(plan, "plan.json")
+        want = [{"dest": "0.0.0.0/0", "target": "aws_internet_gateway.gw"}]
+        self.assertEqual(snap.get("aws_route_table.pub").props["routes"], want)
+        self.assertTrue(snap.get("aws_subnet.pub").props["public"])
+        r = reach.check(snap, "aws_instance.web", "internet", "tcp", 443)
+        self.assertEqual(r.verdict, "reachable", reach.result_text(r))
+        # The default route table belongs to the new VPC, so the other subnet uses it.
+        main = snap.get("aws_default_route_table.main")
+        self.assertEqual((main.parent, main.props["routes"]), ("aws_vpc.main", want))
+        self.assertEqual(snap.get("aws_subnet.other").props["route_table"], "aws_default_route_table.main")
+        r = reach.check(snap, "aws_instance.other", "internet", "tcp", 443)
+        self.assertEqual(r.verdict, "reachable", reach.result_text(r))
+        # With two possible gateways the route stays, as known after apply: can't tell.
+        plan["planned_values"]["root_module"]["resources"].append(res("aws_internet_gateway.gw2", {}))
+        plan["configuration"]["root_module"]["resources"][4]["expressions"]["route"] = {
+            "references": ["aws_internet_gateway.gw.id", "aws_internet_gateway.gw",
+                           "aws_internet_gateway.gw2.id", "aws_internet_gateway.gw2"]}
+        snap = maptf.build(plan, "plan.json")
+        self.assertEqual(snap.get("aws_route_table.pub").props["routes"],
+                         [{"dest": "0.0.0.0/0", "target": "(known after apply)"}])
+        r = reach.check(snap, "aws_instance.web", "internet", "tcp", 443)
+        self.assertEqual(r.verdict, "unknown", reach.result_text(r))
+
     def test_the_example_two_az_vpc(self):
         from awskit import maptf
         snap = maptf.read([str(EXAMPLES / "two-az-vpc-state.json")])
@@ -1474,6 +1569,63 @@ class ScanTests(unittest.TestCase):
         mapscan._build_network(snap, Ctx(), "us-east-1", data)
         self.assertNotIn("listeners", snap.get(LB).props)
         self.assertEqual(snap.get(LB).props["security_groups"], ["sg-1"])
+
+    def test_cloud_wan_routes_are_kept(self):
+        """A route to a Cloud WAN core network used to be dropped, so 10.50.0.0/16 seemed to
+        go out the internet gateway and reachability said blocked."""
+        from awskit import mapscan
+        wan = f"arn:aws:networkmanager::{ACCT}:core-network/core-network-0abc"
+        data = {k: [] for k, _, _ in mapscan.EC2_CALLS}
+        data.update(lbs=[], dbs=[], listeners={})
+        data["vpcs"] = [{"VpcId": "vpc-1", "CidrBlock": "10.0.0.0/16"}]
+        data["subnets"] = [{"SubnetId": "subnet-1", "VpcId": "vpc-1", "CidrBlock": "10.0.1.0/24",
+                            "AvailabilityZone": "us-east-1a"}]
+        data["igws"] = [{"InternetGatewayId": "igw-1", "Attachments": [{"VpcId": "vpc-1", "State": "available"}]}]
+        data["route_tables"] = [{"RouteTableId": "rtb-1", "VpcId": "vpc-1", "Associations": [{"SubnetId": "subnet-1"}],
+                                 "Routes": [{"DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active"},
+                                            {"DestinationCidrBlock": "10.50.0.0/16", "CoreNetworkArn": wan, "State": "active"},
+                                            {"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-1", "State": "active"}]}]
+        data["nacls"] = [{"NetworkAclId": "acl-1", "VpcId": "vpc-1", "IsDefault": True,
+                          "Associations": [{"SubnetId": "subnet-1"}],
+                          "Entries": [{"RuleNumber": 100, "Egress": eg, "RuleAction": "allow", "Protocol": "-1",
+                                       "CidrBlock": "0.0.0.0/0"} for eg in (False, True)]}]
+        data["sgs"] = [{"GroupId": "sg-1", "VpcId": "vpc-1", "GroupName": "x", "IpPermissions": [],
+                        "IpPermissionsEgress": [{"IpProtocol": "-1", "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}]}]
+        data["reservations"] = [{"Instances": [{"InstanceId": "i-1", "SubnetId": "subnet-1", "VpcId": "vpc-1",
+                                                "PrivateIpAddress": "10.0.1.5", "State": {"Name": "running"},
+                                                "SecurityGroups": [{"GroupId": "sg-1"}]}]}]
+
+        class Ctx:
+            account = ACCT
+        snap = mm.Snapshot()
+        mapscan._build_network(snap, Ctx(), "us-east-1", data)
+        mm.finish(snap)
+        self.assertIn({"dest": "10.50.0.0/16", "target": wan}, snap.get("rtb-1").props["routes"])
+        r = reach.check(snap, "i-1", "10.50.1.1", "tcp", 443)
+        self.assertEqual(r.verdict, "unknown", reach.result_text(r))
+        self.assertIn("10.50.0.0/16", hop(r, "route").reason)
+
+    def test_subnet_ipv6_blocks_taken_off_dont_count(self):
+        from awskit import mapscan
+        data = {k: [] for k, _, _ in mapscan.EC2_CALLS}
+        data.update(lbs=[], dbs=[], listeners={})
+        data["vpcs"] = [{"VpcId": "vpc-1", "CidrBlock": "10.0.0.0/16"}]
+        data["subnets"] = [
+            {"SubnetId": "subnet-1", "VpcId": "vpc-1", "CidrBlock": "10.0.1.0/24",
+             "Ipv6CidrBlockAssociationSet": [
+                 {"Ipv6CidrBlock": "2001:db8:0:1::/64", "Ipv6CidrBlockState": {"State": "disassociated"}},
+                 {"Ipv6CidrBlock": "2001:db8:0:2::/64", "Ipv6CidrBlockState": {"State": "associated"}}]},
+            {"SubnetId": "subnet-2", "VpcId": "vpc-1", "CidrBlock": "10.0.2.0/24",
+             "Ipv6CidrBlockAssociationSet": [
+                 {"Ipv6CidrBlock": "2001:db8:0:3::/64", "Ipv6CidrBlockState": {"State": "disassociating"}}]}]
+
+        class Ctx:
+            account = ACCT
+        snap = mm.Snapshot()
+        mapscan._build_network(snap, Ctx(), "us-east-1", data)
+        mm.finish(snap)
+        got = {n: snap.get(n).props.get("ipv6_cidr", "") for n in ("subnet-1", "subnet-2")}
+        self.assertEqual(got, {"subnet-1": "2001:db8:0:2::/64", "subnet-2": ""})
 
 
 # =================================================================== the command line

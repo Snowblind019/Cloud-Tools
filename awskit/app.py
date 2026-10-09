@@ -225,8 +225,17 @@ class App(Gtk.Application):
         install_css()
         appearance.start()
 
+    def _own_window(self):
+        """The window this app is for (the main window, or the small window of its mode).
+        A settings window opened from it is an app window too, and can be the only one left
+        open, so get_active_window() alone would bring that back instead."""
+        kind = {"picker": PickerWindow, "redact-window": RedactWindow,
+                "redact-settings": RedactSettingsWindow,
+                "image-window": ImageWindow}.get(self.page, MainWindow)
+        return next((w for w in self.get_windows() if isinstance(w, kind)), None)
+
     def do_activate(self):
-        win = self.get_active_window()
+        win = self._own_window()
         if win is None:
             if self.page == "picker":
                 win = PickerWindow(self)
@@ -241,9 +250,12 @@ class App(Gtk.Application):
         win.present()
 
     def _show_page(self, action, value):
-        win = self.get_active_window()
-        if isinstance(win, MainWindow):
-            win.show_page(value.get_string())
+        name = value.get_string()
+        win = next((w for w in self.get_windows() if isinstance(w, MainWindow)), None)
+        if win is not None:
+            win.show_page(name)
+        elif self.page not in MODES:
+            self.page = name      # the main window that activate opens next starts there
 
 
 def main(page=None, initial_text=None, initial_file=None, paste=False) -> int:

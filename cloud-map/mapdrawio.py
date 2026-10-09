@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from xml.sax.saxutils import escape, quoteattr
+from xml.sax.saxutils import escape
+from xml.sax.saxutils import quoteattr as _quoteattr
 
 from . import maplayout as ml
 from .mapthemes import (CAPTION_SIZE, CARD_TITLE_SIZE, CONTAINER_TITLE_SIZE, EDGE_LABEL_SIZE,
@@ -168,6 +169,17 @@ def _num(v) -> str:
             return str(int(v))
         return repr(round(v, 4))
     return str(int(v))
+
+
+# Characters XML 1.0 doesn't allow, even escaped. A name from a tag can hold one (EC2
+# takes any character in a tag, and Terraform plans hold what was typed), and a single one
+# would make the whole file unreadable for draw.io and for layout memory.
+_NOT_XML = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff\ud800-\udfff]")
+
+
+def quoteattr(value) -> str:
+    """saxutils.quoteattr, without the characters XML can't hold."""
+    return _quoteattr(_NOT_XML.sub("", str(value)))
 
 
 def _attr_name(name) -> str:

@@ -57,7 +57,8 @@ def load_labels(extra=None) -> dict:
     labels = {}
     for path in [LABELS_FILE] + ([Path(extra)] if extra else []):
         try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            # utf-8-sig: Notepad and PowerShell on Windows can start the file with a BOM.
+            data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         except FileNotFoundError:
             if extra and str(path) == str(extra):
                 raise ValueError(f"Labels file not found: {extra}") from None
@@ -281,15 +282,17 @@ def load_input(path, plan=False, log=None):
         try:
             size = p.stat().st_size
             with open(p, "rb") as fh:
-                head = fh.read(256).lstrip()[:1]
+                head = fh.read(256)
         except OSError as exc:
             raise mm.SnapshotError(f"Couldn't read {path}: {exc.strerror or exc}") from exc
         if size > MAX_INPUT:
             raise mm.SnapshotError(f"{p.name} is {size // 2 ** 20} MB, more than the "
                                    f"{MAX_INPUT // 2 ** 20} MB a snapshot or state can be.")
-        if head == b"{":
+        if maptf.looks_like_json(head):
             try:
-                data = json.loads(p.read_text(encoding="utf-8"))
+                # Saved from Windows, it can start with a byte order mark (or be UTF-16).
+                text = maptf.json_text(p.read_bytes())
+                data = json.loads(text) if text is not None else None
             except (OSError, ValueError) as exc:
                 raise mm.SnapshotError(f"{p.name} isn't valid JSON: {exc}") from exc
             except RecursionError:
@@ -297,7 +300,8 @@ def load_input(path, plan=False, log=None):
                                        "Terraform state.") from None
             if isinstance(data, dict) and data.get("format") == mm.FORMAT_NAME:
                 return mm.Snapshot.from_dict(data)
-            return maptf.build(data, p.name, load_config().get("known_accounts") or [])
+            if text is not None:
+                return maptf.build(data, p.name, load_config().get("known_accounts") or [])
     return read_terraform([str(p)], plan=plan, log=log)
 
 
@@ -385,7 +389,10 @@ def cmd_tf(args) -> int:
     except maptf.TfError as exc:
         err(str(exc))
         return 1
-    out = args.output or (stem_of(args.path[0]) + mm.SUFFIX)
+    first = Path(os.path.expanduser(str(args.path[0])))
+    # Named after the folder, also for "awskit map tf ." (whose name would be empty).
+    stem = maptf.folder_name(first) if first.is_dir() else stem_of(first)
+    out = args.output or ((stem or "cloud-map") + mm.SUFFIX)
     snap.save(out)
     print(f"Wrote {out}: {_summary(snap)}")
     for w in snap.warnings:

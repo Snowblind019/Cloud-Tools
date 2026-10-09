@@ -44,6 +44,10 @@ MAX_UPLOAD = 64 * 1024 * 1024
 # Browsers slow the heartbeat of a minimized or hidden window to about once a minute, so
 # this is generous; closing the window normally is noticed within seconds anyway.
 OUTSIDE_IDLE_S = 600.0
+# When one editor window closes, another one heard from this recently (Open in draw.io
+# pressed twice, say) keeps the session going. A hidden window's heartbeat can be a
+# minute apart.
+OTHER_PAGE_S = 90.0
 # Content types for what draw.io serves. Python's mimetypes can be changed by the Windows
 # registry (.js as text/plain, for one), which the nosniff header would then block.
 CONTENT_TYPES = {
@@ -219,6 +223,7 @@ class Bridge:
         self.closed = False
         self.last_seen = time.monotonic()
         self.requests = collections.deque(maxlen=500)  # (method, path) of recent requests
+        self.pages = {}                 # the id each editor page sends -> when last heard
         self.errors = []
         self._lock = threading.Lock()
         self._watchdog = None
@@ -327,6 +332,27 @@ class Bridge:
         except (OSError, ValueError):
             return None              # a name too long for the file system, for one
         return path
+
+    def heard_from(self, page):
+        """An editor page said it's still open."""
+        if not isinstance(page, str) or not page:
+            return
+        with self._lock:
+            self.pages[page[:64]] = time.monotonic()
+            while len(self.pages) > 32:
+                self.pages.pop(next(iter(self.pages)))
+
+    def page_closed(self, page):
+        """An editor page went away (closed or reloaded). Unless another one is still
+        open, the session ends in a few seconds; the watchdog decides, so a reload that
+        comes straight back doesn't end it."""
+        now = time.monotonic()
+        with self._lock:
+            if isinstance(page, str):
+                self.pages.pop(page[:64], None)
+            others = any(now - seen < OTHER_PAGE_S for seen in self.pages.values())
+        if not others:
+            self.last_seen = now - max(0.0, (self.idle_timeout or 0) - 4)
 
     def saved(self, text: str):
         if not looks_like_drawio(text):
@@ -480,15 +506,14 @@ class BridgeHandler(http.server.BaseHTTPRequestHandler):
             b._finish({"saved": bool(info.get("saved")), "reason": "exit"})
         elif rel in ("alive", "event"):
             info = _json_object(body)
+            b.heard_from(info.get("page"))
             if info.get("event") == "loaded" or info.get("loaded"):
                 b.loaded = True
             if rel == "event" and b.on_event:
                 b.on_event(info)
             self._json({"ok": True})
         elif rel == "closed":
-            # The page went away (closed or reloaded). The watchdog decides, so a reload
-            # that comes straight back doesn't end the session.
-            b.last_seen = time.monotonic() - max(0.0, (b.idle_timeout or 0) - 4)
+            b.page_closed(_json_object(body).get("page"))
             self._json({"ok": True})
         else:
             self._send(404, b"Not found")

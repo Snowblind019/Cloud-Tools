@@ -66,6 +66,7 @@ class CredsPage(Page):
                          "clean up. Read-only.")
         self.result = None
         self.profiles_used = []
+        self.running = False
 
         bar = self.toolbar()
         self.accounts = CheckListButton("Accounts", empty_label="current profile")
@@ -213,6 +214,7 @@ class CredsPage(Page):
         key_age, unused = self.thresholds()
         cancel = self.new_cancel()
         self.profiles_used = profiles
+        self.running = True
         self.run_btn.set_sensitive(False)
         self.status.busy("Starting...", cancel)
         progress = on_main(self.status.progress)
@@ -220,7 +222,13 @@ class CredsPage(Page):
                self.done, self.failed)
 
     def done(self, result):
+        self.running = False
         self.run_btn.set_sensitive(True)
+        key_age, unused = self.thresholds()
+        if (result.key_age, result.unused) != (key_age, unused) and result.accounts:
+            # A threshold was changed while the check ran, so judge it by what's shown now
+            result = creds.analyze(result.accounts, key_age, unused, now=result.now,
+                                   errors=result.errors)
         self.show_result(result)
         n = len(result.accounts)
         text = f"Checked {creds.plural(n, 'account')} at {datetime.now():%H:%M}."
@@ -230,19 +238,22 @@ class CredsPage(Page):
         self.status.idle(text)
 
     def failed(self, exc):
+        self.running = False
         self.run_btn.set_sensitive(True)
         self.status.idle("")
         show_message(self.win, "Check failed", error_text(exc))
 
     def thresholds_changed(self):
         """New thresholds only change the judgement, so the results update without asking
-        AWS again."""
+        AWS again. A check that's running uses them too when it finishes."""
         if self.result is None or not self.result.accounts:
             return
         key_age, unused = self.thresholds()
         self.show_result(creds.analyze(self.result.accounts, key_age, unused,
                                        errors=self.result.errors))
-        self.status.idle(f"Updated for keys older than {key_age} days and {unused} days unused.")
+        if not self.running:  # otherwise the status bar's Stop must keep working
+            self.status.idle(f"Updated for keys older than {key_age} days and {unused} days "
+                             "unused.")
 
     def show_result(self, result):
         """Fill both tables from a creds.Result. Also used to show test data."""

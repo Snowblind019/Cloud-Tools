@@ -965,6 +965,73 @@ class InventoryTests(unittest.TestCase):
         self.assertNotIn("AKIAEXAMPLEALICE0001", tables)
 
 
+# =================================================================== the window's page
+
+try:
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from awskit import creds_page
+except (ImportError, ValueError):  # pragma: no cover
+    creds_page = None
+
+
+@unittest.skipIf(creds_page is None, "GTK 4 not installed")
+class CredsPageTests(unittest.TestCase):
+    """The page's methods on a stand-in, so no display is needed."""
+
+    class Page:
+        def __init__(self, key_age=90, unused=90):
+            for name in ("run", "done", "failed", "thresholds_changed"):
+                setattr(self, name, getattr(creds_page.CredsPage, name).__get__(self))
+            self.picked = (key_age, unused)    # what the two dropdowns show
+            self.result, self.running, self.profiles_used = None, False, []
+            self.win = mock.Mock(profile=None)
+            self.accounts = mock.Mock()
+            self.accounts.selected.return_value = ["lab"]
+            self.run_btn, self.status = mock.Mock(), mock.Mock()
+            self.show_result = mock.Mock(side_effect=lambda r: setattr(self, "result", r))
+            self.new_cancel = mock.Mock(return_value=threading.Event())
+
+        def thresholds(self):
+            return self.picked
+
+    def setUp(self):
+        # bob's key was last used 45 days ago: fine at 90 days, unused at 30
+        self.data = account([row("bob", created=400, keys=[{"created": 60, "used": 45}])],
+                            users=[user("bob", 400)],
+                            keys={"bob": [key("AKIAEXAMPLEBOBKEY001", 60, used=45)]})
+
+    def test_a_threshold_picked_during_a_check_counts_when_it_finishes(self):
+        page = self.Page(90, 90)
+        with mock.patch.object(creds_page, "run_bg") as run_bg:
+            page.run()
+        self.assertEqual(run_bg.call_count, 1)
+        self.assertTrue(page.running)
+        page.picked = (90, 30)       # Unused for 30 days, picked while it runs
+        page.thresholds_changed()    # nothing to judge again yet
+        finished = creds.analyze([self.data], 90, 90, now=NOW)  # what the check used
+        self.assertEqual(codes(finished, "bob"), [])
+        page.done(finished)
+        shown = page.result
+        self.assertFalse(page.running)
+        self.assertEqual((shown.key_age, shown.unused), (90, 30))
+        self.assertEqual(codes(shown, "bob"),
+                         codes(creds.analyze([self.data], 90, 30, now=NOW), "bob"))
+        self.assertTrue(codes(shown, "bob"))
+
+    def test_changing_a_threshold_during_a_check_keeps_stop_working(self):
+        page = self.Page(90, 90)
+        page.result = creds.analyze([self.data], 90, 90, now=NOW)
+        page.running = True
+        page.picked = (90, 30)
+        page.thresholds_changed()
+        self.assertEqual(page.result.unused, 30)
+        page.status.idle.assert_not_called()  # it would hide Stop for the running check
+        page.running = False
+        page.thresholds_changed()
+        page.status.idle.assert_called_once()
+
+
 # =================================================================== reading
 
 def denied(op):

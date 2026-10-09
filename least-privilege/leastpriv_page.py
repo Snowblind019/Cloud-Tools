@@ -19,6 +19,7 @@ CSS = b"""
 .lp-lastaccessed { color: #a347ba; }
 """
 _css_done = False
+_NOT_LOADING = object()
 
 
 def _install_css():
@@ -84,9 +85,12 @@ class LeastPrivPage(Page):
         self.result = None
         self.files = []
         self.roles = {}          # profile -> list of roles
-        self._roles_loading = None
+        # The profile whose roles are being listed. None is a profile too (the default
+        # credential chain), so "not loading" needs a value of its own.
+        self._roles_loading = _NOT_LOADING
         self._split_set = {}      # paned -> the position this page last gave it
         self._highlighted = None  # Sid of the highlighted statement
+        self._gen = 0             # the latest build; an older one's result is dropped
 
         # ---- row 1: who, when, where, how
         row1 = self.toolbar()
@@ -339,7 +343,7 @@ class LeastPrivPage(Page):
 
     def profile_changed(self, profile):
         self.fill_regions()
-        self.role_list.remove_all()
+        clear_box(self.role_list)   # ListBox.remove_all needs GTK 4.12
         self.role_status.set_text("")
 
     def profiles_changed(self):
@@ -369,19 +373,23 @@ class LeastPrivPage(Page):
         self.role_status.set_text("Loading roles...")
 
         def done(roles):
-            self._roles_loading = None
+            if self._roles_loading == profile:
+                self._roles_loading = _NOT_LOADING
             self.roles[profile] = roles
             if profile == self.win.profile:
                 self._fill_roles(roles)
 
         def failed(exc):
-            self._roles_loading = None
+            if self._roles_loading == profile:
+                self._roles_loading = _NOT_LOADING
+            if profile != self.win.profile:
+                return
             self.role_status.set_text("Couldn't list roles: " + (
                 str(exc) if isinstance(exc, AuthError) else error_text(exc, profile)))
         run_bg(lambda: leastpriv.list_roles(AwsContext(profile)), done, failed)
 
     def _fill_roles(self, roles):
-        self.role_list.remove_all()
+        clear_box(self.role_list)
         for r in roles:
             row = Gtk.ListBoxRow()
             box = vbox(0)
@@ -465,6 +473,11 @@ class LeastPrivPage(Page):
         compare = True if not files else bool(who)
         profile = self.win.profile
         options = self.options()
+        # Enter in the name box or Open files can start a build while one is running. Stop
+        # that one, and drop its result, so it can't replace this one when it ends later.
+        self.cancel.set()
+        self._gen += 1
+        gen = self._gen
         cancel = self.new_cancel()
         self.build_btn.set_sensitive(False)
         if files:
@@ -477,14 +490,18 @@ class LeastPrivPage(Page):
         progress = on_main(self.status.progress)
         run_bg(lambda: leastpriv.run(profile, who, days, regions, thorough, files, compare,
                                      options=options, progress=progress, cancel=cancel),
-               self.done, self.failed)
+               lambda result: self.done(result, gen), lambda exc: self.failed(exc, gen))
 
-    def done(self, result):
+    def done(self, result, gen=None):
+        if gen is not None and gen != self._gen:
+            return
         self.build_btn.set_sensitive(True)
         self.show_result(result)
         self.status.idle(result.status_text())
 
-    def failed(self, exc):
+    def failed(self, exc, gen=None):
+        if gen is not None and gen != self._gen:
+            return
         self.build_btn.set_sensitive(True)
         self.status.idle("")
         if isinstance(exc, (leastpriv.LeastPrivError, AuthError)):
@@ -595,8 +612,11 @@ class LeastPrivPage(Page):
         group = row["origin"]
         if group == "implied":
             group = "implied" if row["full"] == "iam:PassRole" else "events"
+        # iam:PassRole gets one statement per service it's passed to.
+        passed_to = row.get("passed_to", "") if group == "implied" else ""
         return next((s["sid"] for s in self.result.statements
-                     if row["full"] in s["actions"] and s["origin"] == group), None)
+                     if row["full"] in s["actions"] and s["origin"] == group and
+                     s.get("passed_to", "") == passed_to), None)
 
     def highlight(self, sid):
         """Show the policy with one statement highlighted. The text goes back in with the

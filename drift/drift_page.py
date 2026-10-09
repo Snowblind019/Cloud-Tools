@@ -417,6 +417,11 @@ class DriftPage(Page):
         def done(inv):
             if gen != self._gen:
                 return
+            if not self.sources:
+                # Every state was removed while it read, so there's nothing to compare.
+                self._idle_buttons()
+                self.status.idle("")
+                return
             if not inv.accounts:
                 self._idle_buttons()
                 self.status.idle("")
@@ -505,6 +510,13 @@ class DriftPage(Page):
 
         def done(results):
             if gen != self._gen:
+                return
+            labels = {s["stack"].label for s in self.sources}
+            results = {k: v for k, v in results.items() if k in labels}
+            if not results:
+                # The folders were removed while Terraform ran.
+                self._idle_buttons()
+                self.status.idle("")
                 return
             self.exact.update(results)
             ok = [k for k, v in results.items() if isinstance(v, list)]

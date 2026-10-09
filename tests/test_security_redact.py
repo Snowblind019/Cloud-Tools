@@ -76,6 +76,15 @@ class NestedSecretTests(RedactCase):
         self.check("GET https://api.example.com/v1/items?page=2&token=s3cr3tT0ken&x=1",
                    gone=["s3cr3tT0ken"], kept=["page=2&token=", "&x=1"])
 
+    def test_empty_query_string_values(self):
+        # ?token=&state=1 used to stop PII Redact with AttributeError
+        for text in ("https://example.com/cb?code=abc&token=&state=xyz",
+                     'curl "https://api.example.com/v1?api_key=&q=1"', "x?secret=#frag"):
+            with self.subTest(text):
+                self.assertEqual(run(text), text)
+        self.check("https://example.com/cb?token=&password=hunter2x&state=xyz",
+                   gone=["hunter2x"], kept=["?token=&password=", "&state=xyz"])
+
 
 class SecretKeyTests(RedactCase):
     """H2: secret keys right after = and inside escaped JSON."""
@@ -185,6 +194,18 @@ class UnquotedValueTests(RedactCase):
                    kept=["host: db.internal", "  password: ", "port: 5432"])
         self.check("export DB_PASSWORD=pa ss # set by ops\nexport DB_PORT=5432",
                    gone=["pa ss", "set by ops"], kept=["export DB_PASSWORD=", "DB_PORT=5432"])
+
+    def test_whole_names(self):
+        # Owner: Jane Doe used to become Owner: [Redacted] Doe, so the surname leaked.
+        self.check("Owner: Jane Doe", gone=["Jane", "Doe"], kept=["Owner: "])
+        self.check("DisplayName: Mary Ann Smith-Jones (admin)",
+                   gone=["Mary", "Ann", "Smith-Jones"], kept=["(admin)"])
+        self.check("first_name: Se\u00e1n O\u2019Brien", gone=["Se\u00e1n", "Brien"])
+        self.check("Tags: Owner=Jane Doe Env=prod, team=ops", gone=["Jane", "Doe"],
+                   kept=["Env=prod", "team=ops"])
+        self.check("Owner: Jane Doe is on call.", gone=["Jane", "Doe"], kept=[" is on call."])
+        self.check("user: admin logged in", gone=["admin"], kept=[" logged in"])
+        self.check("User: jdoe Status: Active", gone=["jdoe"], kept=["Status: Active"])
 
     def test_inline_values_stop_at_the_next_setting(self):
         self.check("level=info password=hunter2#x user_count=3",
@@ -353,6 +374,42 @@ class SettingsFileTests(unittest.TestCase):
         self.assertEqual(decoy.read_text(), "untouched")
         self.assertFalse(redact.CONFIG_FILE.is_symlink())
 
+    def test_odd_settings_dont_stop_redacting(self):
+        # "categories" that isn't an object stopped every redaction with AttributeError
+        redact.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        for categories in (["emails"], "emails", 5):
+            redact.CONFIG_FILE.write_text(json.dumps({"categories": categories,
+                                                      "always_redact": ["snowcorp"]}))
+            with self.subTest(categories):
+                cfg = redact.load_config()
+                self.assertEqual(cfg["categories"], redact.default_config()["categories"])
+                self.assertEqual(cfg["always_redact"], ["snowcorp"])
+
+    def test_settings_saved_with_a_byte_order_mark(self):
+        # Notepad and PowerShell can put a byte order mark first. It used to mean every
+        # setting was ignored.
+        redact.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        redact.CONFIG_FILE.write_bytes(b"\xef\xbb\xbf" + json.dumps(
+            {"numbered": True, "always_redact": ["snowcorp"]}).encode())
+        cfg = redact.load_config()
+        self.assertTrue(cfg["numbered"])
+        self.assertEqual(cfg["always_redact"], ["snowcorp"])
+
+    def test_unreadable_settings_are_kept_before_saving(self):
+        # A typo made by hand used to be wiped by the next save, word lists and all
+        bad = redact.CONFIG_FILE.with_name("redact.json.bad")
+        self.addCleanup(lambda: bad.exists() and bad.unlink())
+        redact.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        typo = '{"always_redact": ["Jane Doe", "snowcorp",]}'
+        redact.CONFIG_FILE.write_text(typo)
+        self.assertEqual(redact.load_config()["always_redact"], [])
+        self.assertTrue(redact.save_config(redact.default_config()))
+        self.assertEqual(bad.read_text(), typo)
+        self.assertEqual(stat.S_IMODE(bad.stat().st_mode), 0o600)
+        bad.unlink()
+        self.assertTrue(redact.save_config(redact.default_config()))   # a good file isn't
+        self.assertFalse(bad.exists())
+
 
 class RunEchoTests(unittest.TestCase):
     """I3: pii-redact run shows the command it runs, redacted."""
@@ -372,6 +429,21 @@ class RunEchoTests(unittest.TestCase):
         self.assertIn("Running mysql -u root --password [Redacted]", err.getvalue())
         self.assertNotIn("hunter2x", err.getvalue())
         self.assertNotIn("54.201.33.17", err.getvalue())
+
+    @unittest.skipIf(os.name == "nt", "file modes")
+    def test_command_that_cant_run_is_a_message(self):
+        # A script without the executable bit, or a folder, used to end in a traceback
+        folder = Path(tempfile.mkdtemp(prefix="awskit-run-"))
+        self.addCleanup(shutil.rmtree, folder)
+        script = folder / "plan.sh"
+        script.write_text("#!/bin/sh\necho hi\n")
+        script.chmod(0o644)
+        args = redact.build_parser().parse_args([])
+        for cmd in ([str(script)], [str(folder)]):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(redact.cmd_run(cmd, redact.default_config(), args), 126)
+            self.assertIn(f"pii-redact: can't run {cmd[0]}", err.getvalue())
 
 
 @unittest.skipUnless(shutil.which("xvfb-run") or os.environ.get("DISPLAY")
@@ -429,15 +501,76 @@ assert out_text(v) == "mail [Redacted]", out_text(v)
 print("ok")
 '''
 
-    def test_background_redaction(self):
-        cmd = [sys.executable, "-c", self.SCRIPT, str(ROOT)]
+    def run_script(self, script, *args):
+        cmd = [sys.executable, "-c", script, str(ROOT), *args]
         if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
             cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24"] + cmd
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
                            env=dict(os.environ, PYTHONPATH=str(ROOT)))
         if "No module named 'gi'" in r.stderr or "Namespace Gtk not available" in r.stderr:
             self.skipTest("GTK 4 for Python isn't installed")
+        return r
+
+    def test_background_redaction(self):
+        r = self.run_script(self.SCRIPT)
         self.assertEqual(r.stdout.strip().splitlines()[-1:], ["ok"], r.stderr[-3000:])
+
+    # The settings window is an app window too. With only it left open, opening AWS Kit
+    # or PII Redact again used to bring back just the settings window.
+    REOPEN = r'''
+import json, os, sys, tempfile
+sys.path.insert(0, sys.argv[1])
+os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp()
+import gi
+gi.require_version("Gtk", "4.0")
+from gi.repository import GLib
+from awskit import app
+
+mode = sys.argv[2] or None
+a = app.App(page=mode)
+out = {}
+
+def names():
+    return sorted(type(w).__name__ for w in a.get_windows())
+
+def first():
+    try:
+        w = a.get_active_window()
+        (w.pages["redact"].view if mode is None else w.view).open_settings()
+        w.close()
+        out["left"] = names()
+        if mode is None:       # awskit gui map, while only the settings window is open
+            a.activate_action("show-page", GLib.Variant.new_string("map"))
+        a.activate()
+        out["after"] = names()
+        mains = [w for w in a.get_windows() if type(w).__name__ == "MainWindow"]
+        out["page"] = mains[0].stack.get_visible_child_name() if mains else None
+        print(json.dumps(out))
+    finally:
+        a.quit()
+    return False
+
+def start():
+    if a.get_active_window() is None:
+        return True
+    GLib.timeout_add(300, first)
+    return False
+
+GLib.timeout_add(100, start)
+a.run([])
+'''
+
+    def test_opening_again_brings_the_window_back(self):
+        for mode, window in (("", "MainWindow"), ("redact-window", "RedactWindow")):
+            with self.subTest(mode or "main"):
+                r = self.run_script(self.REOPEN, mode)
+                lines = [x for x in r.stdout.splitlines() if x.startswith("{")]
+                self.assertTrue(lines, r.stderr[-3000:])
+                got = json.loads(lines[-1])
+                self.assertEqual(got["left"], ["RedactSettingsWindow"])
+                self.assertEqual(got["after"], sorted([window, "RedactSettingsWindow"]))
+                if not mode:
+                    self.assertEqual(got["page"], "map")
 
 
 class ProfileFileTests(unittest.TestCase):

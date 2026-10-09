@@ -14,6 +14,7 @@ $300 one. They are not a bill. Use "spend" for what Cost Explorer actually shows
 """
 from __future__ import annotations
 
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
@@ -943,12 +944,31 @@ def kind_choices() -> list:
     return sorted(KINDS)
 
 
+def _arn_end(text) -> str:
+    """The resource's own ID or name at the end of an ARN (key/1234 -> 1234, db:lab -> lab,
+    arn:aws:s3:::bucket -> bucket), or "" for text that isn't an ARN."""
+    parts = str(text).split(":", 5)
+    if len(parts) < 6 or parts[0] != "arn":
+        return ""
+    return re.split(r"[:/]", parts[5])[-1]
+
+
 def is_kept(item, cfg) -> bool:
     """True if the keep list names the item, or it has the keep tag. The tag can only
-    match types whose scan reads tags (see the note at the top)."""
+    match types whose scan reads tags (see the note at the top).
+
+    The keep list takes IDs, ARNs or names. Most items are listed by ID, so an ARN on the
+    keep list also keeps the item whose ID or name ends it, and an item listed by ARN is
+    also kept by the ID at the end of its ARN."""
     keep = set(cfg.get("keep") or [])
     tag = cfg.get("keep_tag") or ""
-    return item.id in keep or item.name in keep or bool(tag and tag in item.tags)
+    if item.id in keep or item.name in keep or bool(tag and tag in item.tags):
+        return True
+    ends = {_arn_end(k) for k in keep} - {""}
+    if item.id in ends or (item.name and item.name in ends):
+        return True
+    own = _arn_end(item.id)
+    return bool(own) and own in keep
 
 
 def apply_keep(items, cfg=None):

@@ -6,6 +6,18 @@
 #   --no-drawio         skip the draw.io download; Cloud Map then uses stand-in icons and
 #                       can't open its editor
 set -euo pipefail
+
+# The draw.war path is from the folder you ran this in, so it's made absolute before the cd.
+abs_path() { case "$1" in /*|"~"*) printf '%s' "$1" ;; *) printf '%s/%s' "$PWD" "$1" ;; esac; }
+args=()
+while (( $# )); do
+  case "$1" in
+    --drawio-zip) args+=("$1"); shift; if (( $# )); then args+=("$(abs_path "$1")"); shift; fi ;;
+    --drawio-zip=*) args+=("--drawio-zip=$(abs_path "${1#*=}")"); shift ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+
 cd "$(dirname "$(readlink -f "$0")")"
 
 missing=()
@@ -47,4 +59,4 @@ command -v tesseract >/dev/null || \
 python3 -c 'import gi; gi.require_version("WebKit", "6.0")' 2>/dev/null || \
   echo "Note: optional, Cloud Map edits maps right in the window with WebKitGTK 6.0 (Fedora: sudo dnf install webkitgtk6.0, Debian/Ubuntu: sudo apt install gir1.2-webkit-6.0, Arch: sudo pacman -S webkitgtk-6.0). Without it, the editor opens in its own browser window."
 
-python3 -m awskit install "$@"
+python3 -m awskit install ${args[@]+"${args[@]}"}

@@ -94,15 +94,24 @@ def load(path) -> dict:
         return empty()
     if not isinstance(data.setdefault("maps", {}), dict):
         data["maps"] = {}
+    data["maps"] = {k: sec for k, sec in data["maps"].items() if isinstance(sec, dict)}
     for sec in data["maps"].values():
-        if isinstance(sec, dict):
-            _clean_section(sec)
+        _clean_section(sec)
     return data
 
 
 def _clean_section(sec):
     """Drops remembered positions that aren't usable numbers (a hand-edited sidecar), and
     keeps the rest within COORD_LIMIT."""
+    for key, kind in (("nodes", dict), ("edges", dict), ("styles", dict), ("extra", list)):
+        if key in sec and not isinstance(sec[key], kind):
+            sec[key] = kind()
+    styles = sec.get("styles", {})
+    for nid, over in list(styles.items()):
+        if not isinstance(over, dict):
+            del styles[nid]
+    if "extra" in sec:
+        sec["extra"] = [x for x in sec["extra"] if isinstance(x, str)]
     nodes = sec.get("nodes")
     if isinstance(nodes, dict):
         for nid, rec in list(nodes.items()):
@@ -628,7 +637,7 @@ def _extra_xml(c, rid=None) -> str:
 
 def _read_labels(path):
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         return {str(k): v for k, v in data.items() if isinstance(v, (str, dict))}
     except (OSError, ValueError, AttributeError):
         return {}

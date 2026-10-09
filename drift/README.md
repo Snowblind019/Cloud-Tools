@@ -35,6 +35,8 @@ You can give it any number of stacks at once:
 | Plan JSON (`terraform show -json tfplan`) | Read straight from the file. It uses the plan's prior state, and its `resource_drift` (Terraform's own view of what changed) is shown as "from Terraform's refresh". |
 | A Terraform folder | Runs `terraform show -json` there to read its current state |
 
+Files can be UTF-8 or UTF-16, which is what Windows PowerShell 5 writes with `terraform state pull > state.json`. A version 3 state, from Terraform 0.11 or older, can't be read: give Drift its folder instead, with Terraform 0.12 or newer.
+
 Running Terraform in a folder runs that folder's code: Terraform starts the providers it names, and some data sources run programs, all with your AWS credentials. So the window asks once per folder each session first, and the terminal only does it when you give the folder yourself. Reading a file never runs anything.
 
 Only managed resources from the AWS provider are read, not data sources and not other providers like `random` or `tls`. For each one Drift works out its type, address, region and account (from the ARN, the `region` attribute, the availability zone, or the resources it points at), and the ID AWS uses for it: the instance ID, bucket name, role name, queue URL, load balancer ARN, and so on.
@@ -89,7 +91,7 @@ It reads these types in the regions you pick (by default, the regions your state
 How things are compared:
 
 - **Tags:** added, removed and changed tags, with the old and new value. AWS's own `aws:` tags are ignored. It compares with `tags_all`, so tags from the provider's `default_tags` count.
-- **Security group rules:** each rule is split into protocol, ports and one source (a CIDR, a prefix list or another group), so the same rule written two ways still matches. Descriptions are ignored.
+- **Security group rules:** each rule is split into protocol, ports and one source (a CIDR, a prefix list or another group), so the same rule written two ways still matches. Descriptions are ignored, and so are the ports of protocols that have none, like ESP (50) or GRE (47), since AWS ignores them too.
 - **Trust policies:** compared as normalized JSON, so key order, one-item lists and an account ID written as `123456789012` or as its root ARN don't count as changes.
 - Old and new values are always shown, except sensitive ones.
 

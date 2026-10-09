@@ -5,6 +5,7 @@ Run from the repo root:  python3 tests/test_security_sweep.py (or every test fil
 python3 -m unittest discover -s tests)
 """
 import sys
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -131,6 +132,19 @@ class TeardownKeepRecheckTests(MotoCase):
         self.assertEqual(dry[self.instance], "Kept (keep list or keep tag)")
         self.assertEqual(dry[self.eip], "Would delete")
 
+    def test_keep_list_arn_is_honored_by_scan_and_teardown(self):
+        arn = f"arn:aws:ec2:us-east-1:{self.account}:instance/{self.instance}"
+        set_config(keep=[arn])
+        scanned = {i.id: i.kept for i in self.scan()}
+        self.assertEqual(scanned, {self.instance: True, self.eip: False})
+        set_config(keep=[])
+        items = self.scan()
+        set_config(keep=[arn])  # kept by its ARN after the scan
+        results = {it.id: (ok, msg) for it, ok, msg in sweep.teardown(items)}
+        self.assertEqual(results[self.instance], (False, "Kept (keep list or keep tag)"))
+        self.assertTrue(results[self.eip][0])
+        self.assertEqual(self.instance_state(), "running")
+
 
 class ApplyKeepTests(unittest.TestCase):
     def tearDown(self):
@@ -148,6 +162,30 @@ class ApplyKeepTests(unittest.TestCase):
         set_config(keep=[], keep_tag="other")
         sweep.apply_keep([a, b])
         self.assertEqual((a.kept, b.kept), (False, False))
+
+    def test_keep_list_takes_arns(self):
+        # Settings says the keep list takes IDs, ARNs or names. Most items are listed by ID,
+        # so an ARN used to keep nothing and the item could still be ticked and deleted.
+        acct = "111122223333"
+        key = sweep.Item("kms_key", "1234abcd-12ab-34cd-56ef-1234567890ab", "lab-key")
+        aliased = sweep.Item("kms_key", "0b1c2d3e-12ab-34cd-56ef-1234567890ab", "prod-key")
+        db = sweep.Item("rds_instance", "lab-db", "lab-db")
+        bucket = sweep.Item("s3_bucket", "lab.data-bucket", "lab.data-bucket")
+        snap = sweep.Item("ebs_snapshot", "snap-0123456789abcdef0")
+        ca = sweep.Item("private_ca", f"arn:aws:acm-pca:us-east-1:{acct}:certificate-authority/"
+                        "0f1e2d3c-1111-2222-3333-444455556666", "lab CA")
+        other = sweep.Item("ec2_instance", "i-0abc1234def567890", "lab-box")
+        set_config(keep_tag="", keep=[
+            f"arn:aws:kms:us-east-1:{acct}:key/{key.id}",
+            f"arn:aws:kms:us-east-1:{acct}:alias/prod-key",
+            f"arn:aws:rds:us-east-1:{acct}:db:lab-db",
+            "arn:aws:s3:::lab.data-bucket",
+            "arn:aws:ec2:us-east-1::snapshot/snap-0123456789abcdef0",
+            "0f1e2d3c-1111-2222-3333-444455556666",     # the CA's ID, the end of its ARN
+            "arn:aws:ec2:us-east-1:111122223333:instance/i-0ffffffffffffffff"])
+        items = [key, aliased, db, bucket, snap, ca, other]
+        sweep.apply_keep(items)
+        self.assertEqual([i.kept for i in items], [True] * 6 + [False])
 
 
 @unittest.skipIf(mock_aws is None, "moto not installed")
@@ -265,6 +303,24 @@ class FakeTable:
         return [r for r in self.rows if r.checked]
 
 
+class RowTable(FakeTable):
+    """A FakeTable that set_rows fills the way the real one does."""
+
+    def set_rows(self, rows, objs=None, checkable=None):
+        self.rows = []
+        for n, data in enumerate(rows):
+            r = FakeRow(objs[n], checkable[n] if checkable else True)
+            r.data = data
+            self.rows.append(r)
+
+    def clear(self, placeholder=None):
+        self.rows = []
+        self.placeholder = placeholder
+
+    def refresh_rows(self):
+        pass
+
+
 if sweep_page is not None:
     class FakePage:
         P = sweep_page.SweepPage
@@ -288,6 +344,31 @@ if sweep_page is not None:
             self.delete_btn, self.scan_btn, self.spend_btn = FakeWidget(), FakeWidget(), FakeWidget()
             self.sel_label = FakeWidget()
             self.show_items = mock.Mock()
+
+    class RedrawPage(FakePage):
+        """The page with its real table drawing, teardown result and Keep ticked."""
+        P = sweep_page.SweepPage
+        show_items = P.show_items
+        item_row = P.item_row
+        teardown_done = P.teardown_done
+        keep_ticked = P.keep_ticked
+        scan_done = P.scan_done
+        export = P.export
+        EXPORT_COLS = P.EXPORT_COLS
+
+        def __init__(self, items):
+            super().__init__([])
+            del self.show_items  # the real one, from the class
+            self.table = RowTable([])
+            self.items, self.warnings = list(items), []
+            self.outcomes = {}
+            self.summary, self.detail = FakeWidget(), FakeWidget()
+            self.status = mock.Mock()
+            self.cancel = threading.Event()
+            self.show_items()
+
+        def row_for(self, item):
+            return next(r for r in self.table.items() if r.obj is item)
 
 
 @unittest.skipIf(sweep_page is None, "GTK 4 not installed")
@@ -364,6 +445,56 @@ class SweepPageTests(unittest.TestCase):
         self.assertTrue(self.a.kept)
         self.assertFalse(self.kept.kept)  # no longer on the keep list or tagged
         page.show_items.assert_called_once()
+
+    def test_deleted_rows_stay_deleted_when_the_table_is_redrawn(self):
+        # Keep ticked (or saving Settings) redraws the table from the scan. Deleted rows
+        # used to come back as "can delete", tickable, so they could be deleted again.
+        c = sweep.Item("nat_gateway", "nat-c", region="us-east-1", monthly=32.85)
+        page = RedrawPage([self.a, self.b, c])
+        for it in (self.a, self.b):
+            page.row_for(it).checked = True
+        page.teardown_done([(self.a, True, "Deleting"), (self.b, False, "Throttling")])
+        page.row_for(c).checked = True
+        page.keep_ticked()
+        self.assertTrue(c.kept)
+        a, b = page.row_for(self.a), page.row_for(self.b)
+        self.assertEqual((a.data["action"], a.checkable, a.data["_dim"]), ("deleted", False, True))
+        self.assertEqual((b.data["action"], b.checkable), ("failed", True))
+        self.assertEqual(page.row_for(c).data["action"], "kept")
+        page.tick_all_deletable()
+        self.assertEqual([r.obj for r in page.table.checked()], [self.b])
+        with mock.patch.object(sweep_page, "export_rows") as export_rows:
+            page.export()
+        rows = export_rows.call_args.args[1]
+        self.assertEqual([r["action"] for r in rows], ["deleted", "failed", "kept"])
+        self.assertFalse(any(k.startswith("_") for r in rows for k in r))
+        # A new scan starts over
+        page.scan_done(([self.a], []))
+        self.assertEqual(page.row_for(self.a).data["action"], "can delete")
+
+    def test_a_scan_that_couldnt_run_doesnt_look_clean(self):
+        # A profile that couldn't sign in used to end in "Nothing found that costs money.
+        # Nice and clean." with the reason only in the notes.
+        page = RedrawPage([])
+        page.scan_done(([], ["lab: Sign-in for profile lab has expired. Run: aws sso login "
+                             "--profile lab"]))
+        self.assertEqual(page.summary.text, "Nothing found, but some checks couldn't run.")
+        self.assertIn("couldn't run", page.table.placeholder)
+        self.assertNotIn("clean", page.table.placeholder)
+        page.scan_done(([self.kept], ["lab: no permission to list NAT gateway (us-east-1)"]))
+        self.assertEqual(page.summary.text, "Nothing found, but some checks couldn't run.")
+        page.scan_done(([self.a], ["lab: no permission to list NAT gateway (us-west-2)"]))
+        self.assertIn("1 item(s)", page.summary.text)
+        page.scan_done(([], []))
+        self.assertEqual(page.summary.text, "Nothing found that costs money.")
+        self.assertIn("Nice and clean", page.table.placeholder)
+
+    def test_a_new_scan_clears_the_last_scans_notes(self):
+        page = RedrawPage([])
+        page.scan_done(([], ["default: couldn't check NAT gateway in us-east-1."]))
+        self.assertIn("couldn't check NAT gateway", page.detail.text)
+        page.scan_done(([self.a], []))
+        self.assertEqual(page.detail.text, "")
 
 
 if __name__ == "__main__":

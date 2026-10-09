@@ -21,8 +21,9 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT =Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 # test_tools sets up the fake AWS environment and a temp config folder. Every test file
@@ -1176,6 +1177,105 @@ class SettingsTests(unittest.TestCase):
         common.CONFIG_FILE.write_text(json.dumps(raw), encoding="utf-8")
         self.assertEqual(ss.load_settings(), dict(ss.DEFAULT_SETTINGS, folder=""))
         ss.save_settings(dict(ss.DEFAULT_SETTINGS))
+
+
+# =================================================================== the window's page
+
+try:
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from awskit import secrets_page
+except (ImportError, ValueError):  # pragma: no cover
+    secrets_page = None
+
+
+class _Sensitive:
+    def __init__(self):
+        self.sensitive = True
+
+    def set_sensitive(self, value):
+        self.sensitive = value
+
+
+@unittest.skipIf(secrets_page is None, "GTK 4 not installed")
+class SecretsPageTests(unittest.TestCase):
+    """The page's methods on a stand-in, so no display is needed."""
+
+    class Page:
+        def __init__(self, folder):
+            P = secrets_page.SecretsPage
+            for name in ("run", "done", "failed", "set_folder", "show_folder", "current_mode",
+                         "apply_block_ids", "hook_job"):
+                setattr(self, name, getattr(P, name).__get__(self))
+            self.folder, self.result, self.hook = folder, None, {"state": "on"}
+            self.scanning, self._scan_gen = False, 0
+            self.cancel = threading.Event()
+            self.scan_btn = _Sensitive()
+            self.mode = mock.Mock()
+            self.mode.get_selected.return_value = secrets_page.MODE_KEYS.index("files")
+            self.depth = mock.Mock()
+            self.depth.get_value.return_value = 200
+            self.block_ids = mock.Mock()
+            self.block_ids.get_active.return_value = False
+            for name in ("allow_btn", "hook_btn", "status", "folder_label", "table", "detail",
+                         "save", "show_counts", "refresh_hook", "fill_table"):
+                setattr(self, name, mock.Mock())
+
+        def new_cancel(self):
+            self.cancel = threading.Event()
+            return self.cancel
+
+    @staticmethod
+    def result(root, *findings):
+        return ss.ScanResult(mode="files", root=root, target=root, findings=list(findings))
+
+    def test_picking_another_folder_drops_the_running_scan(self):
+        # Picking a folder mid-scan used to turn Scan back on, so two scans ran at once and
+        # the old folder's findings could land under the new folder.
+        page = self.Page("/tmp/repo-a")
+        with mock.patch.object(secrets_page, "run_bg") as run_bg:
+            page.run()
+            self.assertFalse(page.scan_btn.sensitive)
+            first_cancel = page.cancel
+            _, done_a, failed_a = run_bg.call_args.args
+            page.set_folder("/tmp/repo-b", check_mode=False)
+            self.assertTrue(first_cancel.is_set())
+            self.assertTrue(page.scan_btn.sensitive)
+            page.run()
+            page.run()  # a second press while repo-b's scan runs does nothing
+            self.assertEqual(run_bg.call_count, 2)
+            self.assertFalse(page.scan_btn.sensitive)
+            _, done_b, _ = run_bg.call_args.args
+        done_a(self.result("/tmp/repo-a"))   # repo-a's scan finishing late
+        failed_a(ss.ScanError("stopped"))
+        self.assertIsNone(page.result)
+        self.assertTrue(page.scanning)
+        self.assertFalse(page.scan_btn.sensitive)
+        done_b(self.result("/tmp/repo-b"))
+        self.assertEqual(page.result.root, "/tmp/repo-b")
+        self.assertFalse(page.scanning)
+        self.assertTrue(page.scan_btn.sensitive)
+
+    def test_account_ids_follow_the_box_ticked_during_a_scan(self):
+        page = self.Page("/tmp/repo-a")
+        with mock.patch.object(secrets_page, "run_bg") as run_bg:
+            page.run()   # started with the box off
+        page.block_ids.get_active.return_value = True   # ticked while it runs
+        acct = ss.Finding("warn", "account_id", "AWS account ID", "main.tf", 3, 1, "1111****2222")
+        run_bg.call_args.args[1](self.result("/tmp/repo-a", acct))
+        self.assertEqual(page.result.findings[0].level, "block")
+
+    def test_a_hook_change_during_a_scan_keeps_stop_working(self):
+        page = self.Page("/tmp/repo-a")
+        with mock.patch.object(secrets_page, "run_bg") as run_bg:
+            page.run()
+            page.status.reset_mock()
+            page.hook_job(lambda: "Installed the commit hook.")
+            hook_done = run_bg.call_args.args[1]
+        with mock.patch.object(secrets_page.secretscan, "find_awskit_on_path", return_value=True):
+            hook_done("Installed the commit hook.")
+        page.status.idle.assert_not_called()  # idle hides Stop while the scan still runs
+        page.detail.set_text.assert_called_with("Installed the commit hook.")
 
 
 if __name__ == "__main__":

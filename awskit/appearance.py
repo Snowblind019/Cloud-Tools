@@ -3,7 +3,6 @@ scheme, an accent color and the text size. theme.py does the colors; this applie
 GTK, keeps every open AWS Kit window in step, and has the Appearance window."""
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import threading
@@ -11,7 +10,7 @@ import threading
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 
 from . import theme
-from .common import CONFIG_FILE, is_wsl, load_config, save_config
+from .common import CONFIG_FILE, is_wsl, load_config, save_config, windows_tool
 
 # Over GTK's own theme, under AWS Kit's own rules and the user's gtk.css.
 THEME_PRIORITY = Gtk.STYLE_PROVIDER_PRIORITY_SETTINGS + 100
@@ -152,9 +151,10 @@ def _windows_dark():
 
 
 def _wsl_dark():
-    """Windows' app setting, read from WSL with Windows' own reg.exe."""
-    reg = "/mnt/c/Windows/System32/reg.exe"
-    if not os.path.isfile(reg):
+    """Windows' app setting, read from WSL with Windows' own reg.exe. It's looked for on
+    the PATH too, since Windows' drive isn't at /mnt/c when wsl.conf moves it."""
+    reg = windows_tool("reg.exe")
+    if not reg:
         return None
     try:
         r = subprocess.run([reg, "query", r"HKCU\Software\Microsoft\Windows\CurrentVersion"
@@ -597,7 +597,16 @@ class AppearanceWindow(Gtk.Window):
                 self.accent_buttons.get(accent, self.accent_buttons["default"]).set_active(True)
             sizes = [pct for pct, _ in theme.TEXT_SIZES]
             pct = settings["text_size"]
-            self.size_dd.set_selected(sizes.index(pct) if pct in sizes else 1)
+            model = self.size_dd.get_model()
+            if model.get_n_items() > len(sizes):
+                model.splice(len(sizes), model.get_n_items() - len(sizes), [])
+            if pct in sizes:
+                self.size_dd.set_selected(sizes.index(pct))
+            else:
+                # A size set with awskit appearance --text-size, between the usual ones.
+                # Showing Normal here instead meant picking Normal changed nothing.
+                model.append(f"Custom ({pct}%)")
+                self.size_dd.set_selected(len(sizes))
         finally:
             self._quiet = False
         self._refresh_cards()

@@ -76,7 +76,7 @@ A permissions boundary on the identity is mentioned in the finding, since it may
 | **Keys older than** | 90 days | Active keys older than this should be rotated |
 | **Unused for** | 90 days | Passwords, keys, users and roles not used for this long, and how recent counts as "root used recently" |
 
-In the window, changing either one updates the results right away, without asking AWS again.
+In the window, changing either one updates the results right away, without asking AWS again. Changing one while a check runs counts for that check too.
 
 ## The Identities view
 

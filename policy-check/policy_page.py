@@ -220,7 +220,9 @@ class PolicyPage(Page):
                 show_message(self.win, "That file is too big",
                              "It's over 1 MB. IAM policies are a few KB at most.")
                 return
-            self.buffer.set_text(Path(path).read_text(encoding="utf-8"))
+            # UTF-8 or UTF-16 with a byte order mark too, as Notepad and PowerShell save it
+            text = iampolicy.decode_text(Path(path).read_bytes())
+            self.buffer.set_text(text.replace("\r\n", "\n").replace("\r", "\n"))
         except (OSError, ValueError) as exc:
             show_message(self.win, "Couldn't open the file", str(exc))
 

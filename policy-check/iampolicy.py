@@ -160,6 +160,29 @@ class PolicyError(ValueError):
     pass
 
 
+# Byte order marks a file can start with. Notepad can save UTF-8 with one, and Windows
+# PowerShell 5.1 writes UTF-16 with one when output goes to a file with > or Out-File.
+TEXT_BOMS = ((b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be"))
+
+
+def decode_text(data: bytes) -> str:
+    """A text file's bytes as text: UTF-8, or UTF-8 or UTF-16 with a byte order mark.
+    Raises UnicodeDecodeError (a ValueError) for anything else."""
+    for bom, encoding in TEXT_BOMS:
+        if data.startswith(bom):
+            return data[len(bom):].decode(encoding)
+    return data.decode("utf-8")
+
+
+def json_text(data: bytes):
+    """A file's text when it starts like a JSON object, else None. Takes the same encodings
+    as decode_text, and raises UnicodeDecodeError when it starts like JSON but isn't text."""
+    if not data.startswith(tuple(bom for bom, _ in TEXT_BOMS)) and data.lstrip()[:1] != b"{":
+        return None
+    text = decode_text(data)
+    return text if text.lstrip()[:1] == "{" else None
+
+
 def _unwrap(obj):
     """Accept full CLI/boto3 output, not just the bare document."""
     if not isinstance(obj, dict):
@@ -205,7 +228,7 @@ def _too_deep(obj, limit=MAX_POLICY_DEPTH) -> bool:
 
 def load_policy(text: str) -> tuple:
     """Parse JSON, URL-encoded JSON, or a printed boto3 dict. Returns (doc, note)."""
-    raw = (text or "").strip()
+    raw = (text or "").lstrip("\ufeff").strip()   # a byte order mark from a Windows file
     if not raw:
         raise PolicyError("Paste a policy first.")
     if len(raw) > MAX_POLICY_TEXT:
@@ -266,7 +289,7 @@ def detect_kind(doc) -> str:
     has_principal = any("Principal" in s or "NotPrincipal" in s for s in sts)
     if not has_principal:
         return "identity"
-    actions = [a.lower() for s in sts for a in as_list(s.get("Action"))]
+    actions = [str(a).lower() for s in sts for a in as_list(s.get("Action"))]
     has_resource = any("Resource" in s or "NotResource" in s for s in sts)
     if actions and all(a.startswith("sts:assumerole") or a.startswith("sts:tagsession")
                        or a.startswith("sts:setsourceidentity") or a.startswith("sts:setcontext")
@@ -337,7 +360,7 @@ def condition_keys(stmt) -> set:
     if isinstance(cond, dict):
         for block in cond.values():
             if isinstance(block, dict):
-                keys.update(k.lower() for k in block)
+                keys.update(str(k).lower() for k in block)
     return keys
 
 
@@ -348,7 +371,7 @@ def condition_values(stmt, key: str) -> list:
         for block in cond.values():
             if isinstance(block, dict):
                 for k, v in block.items():
-                    if k.lower() == key.lower():
+                    if str(k).lower() == key.lower():
                         out += [str(x) for x in as_list(v)]
     return out
 
@@ -473,7 +496,7 @@ def analyze(doc, kind: str | None = None) -> list:
         out.append(Finding("high", "No statements", "The Statement list is empty."))
         return out
 
-    sids = [s.get("Sid") for s in sts if s.get("Sid")]
+    sids = [str(s.get("Sid")) for s in sts if s.get("Sid")]   # a Sid that isn't text, too
     dupes = sorted({s for s in sids if sids.count(s) > 1})
     if dupes:
         out.append(Finding("low", "Duplicate Sid", ", ".join(dupes),

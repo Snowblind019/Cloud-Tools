@@ -8,7 +8,7 @@ from pathlib import Path
 
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango
 
-from . import scpcheck
+from . import iampolicy, scpcheck
 from .common import error_text
 from .widgets import (DetailPane, Page, ResultTable, button, clear_box, confirm_terraform, flash,
                       hbox, label, on_main, open_file, run_bg, set_clipboard, show_message,
@@ -887,7 +887,9 @@ class ScpPage(Page):
                 show_message(self.win, "That file is too big",
                              "It's over 64 KB. An SCP can be 5,120 characters at most.")
                 return
-            self.draft_buffer.set_text(p.read_text(encoding="utf-8"))
+            # UTF-8 or UTF-16 with a byte order mark too, as Notepad and PowerShell save it
+            text = iampolicy.decode_text(p.read_bytes())
+            self.draft_buffer.set_text(text.replace("\r\n", "\n").replace("\r", "\n"))
         except (OSError, UnicodeDecodeError) as exc:
             show_message(self.win, "Couldn't open the file", str(exc))
 

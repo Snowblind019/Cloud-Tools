@@ -63,7 +63,7 @@ Items marked **manual** need several steps to delete properly, so teardown leave
 
 1. Pick **Accounts**. It starts on the current profile. Tick more profiles to scan several accounts at once.
 2. Pick **Regions**, or leave it on **All enabled**.
-3. Press **Scan**. Progress shows at the bottom, and **Stop** cancels.
+3. Press **Scan**. Progress shows at the bottom, and **Stop** cancels. Checks that couldn't run (sign-in expired, no permission, no connection) are listed in the details pane, and when nothing else was found the summary says some checks couldn't run instead of looking clean.
 4. Click a row to see everything about it in the details pane, including tags, notes, and why it can't be deleted if that's the case.
 5. Tick rows to delete, or press **Tick everything deletable**. Kept and manual rows can't be ticked. **Tick everything deletable** only ticks the rows the filter is showing. If some ticked rows are hidden by the filter, the count next to **Delete ticked** and the confirm window both say how many, and the confirm window marks them.
 6. Press **Dry run** to see the order teardown would go in, without touching anything.

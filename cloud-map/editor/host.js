@@ -5,6 +5,9 @@
   var base = location.pathname.replace(/[^/]*$/, "");      // /TOKEN/
   var origin = location.origin;
   var state = { loaded: false, closing: false, timer: null };
+  // Which page this is, so AWS Kit can tell one editor window closing from the last one
+  // closing when the editor is open in two.
+  var page = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
   function post(message) {
     frame.contentWindow.postMessage(JSON.stringify(message), origin);
@@ -94,7 +97,7 @@
       });
     } else if (msg.event === "load") {
       state.loaded = true;
-      call("event", { event: "loaded" }).catch(function () { });
+      call("event", { event: "loaded", page: page }).catch(function () { });
       loadLibrary();
     } else if (msg.event === "save") {
       save(msg.xml, !!msg.exit);
@@ -131,15 +134,17 @@
 
   // A heartbeat, so AWS Kit can tell when a browser window was closed without Exit.
   state.timer = setInterval(function () {
-    if (!state.closing) { call("alive", { loaded: state.loaded }).catch(function () { }); }
+    if (!state.closing) { call("alive", { loaded: state.loaded, page: page }).catch(function () { }); }
   }, 5000);
   // A hidden window's timers are slowed down, so say hello as soon as it's shown again.
   document.addEventListener("visibilitychange", function () {
     if (!document.hidden && !state.closing) {
-      call("alive", { loaded: state.loaded }).catch(function () { });
+      call("alive", { loaded: state.loaded, page: page }).catch(function () { });
     }
   });
   window.addEventListener("pagehide", function () {
-    if (!state.closing && navigator.sendBeacon) { navigator.sendBeacon(base + "closed", "{}"); }
+    if (!state.closing && navigator.sendBeacon) {
+      navigator.sendBeacon(base + "closed", JSON.stringify({ page: page }));
+    }
   });
 })();

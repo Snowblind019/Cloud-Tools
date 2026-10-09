@@ -346,6 +346,8 @@ Everything lives in `~/.config/awskit/`:
 
 Keys that a newer version of AWS Kit added are kept as they are when an older one saves the file.
 
+If `config.json` or `redact.json` can't be read, say after a typo while editing it by hand, AWS Kit uses the defaults until it's fixed. The next time it saves that file, the one it couldn't read is kept next to it as `config.json.bad` or `redact.json.bad`, so nothing you wrote is lost.
+
 ## Windows
 
 AWS Kit runs on Windows 10 and 11 the same way it does on Linux: the same window, all fourteen tools, and the same commands. It's the same code, running on GTK 4 for Windows.
@@ -477,6 +479,7 @@ They cover PII Redact against its sample file and its settings, Image Redact's b
 | Image Redact says it needs tesseract | `sudo dnf install tesseract tesseract-langpack-eng`. Drawing by hand works without it. |
 | Image Redact crashes with `Couldn't find foreign struct converter for 'cairo.Context'` | Debian/Ubuntu: `sudo apt install python3-gi-cairo` |
 | Crashes on start with `Couldn't open libGLESv2.so.2` | GTK couldn't set up the GPU. AWS Kit draws in software on WSL by itself, so this shouldn't happen there. Anywhere else, run `GSK_RENDERER=cairo awskit` or install the GLES library (Fedora: `libglvnd-gles`) |
+| On WSL, menus or dropdowns stay on the screen after they close | That's WSLg's Wayland side ([microsoft/wslg#1265](https://github.com/microsoft/wslg/issues/1265)). AWS Kit uses X11 on WSL to avoid it, so check that `GDK_BACKEND` isn't set to `wayland` in your shell, and that `echo $DISPLAY` prints something like `:0` |
 | On WSL, `pii-redact clip` can't read the Windows clipboard | PowerShell is missing or blocked. Install `wl-clipboard` so it can fall back to the WSLg clipboard |
 | Old window rules for PII Redact stopped matching | The app ID changed to `io.github.Snowblind019.AwsKit.Redact`, see [Keybinds](#keybinds) |
 | Terminals don't switch profile | Add the shell hook, see [profiles/](../profiles/) |

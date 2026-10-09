@@ -475,7 +475,9 @@ def _build_network(snap, ctx, region, d):
         mm.add_vpc(snap, v["VpcId"], v.get("OwnerId", acct), region, cidrs or [v.get("CidrBlock", "")],
                    name_tag(v.get("Tags")), v.get("IsDefault", False), _tags(v))
     for s in d["subnets"]:
-        ipv6 = next((a.get("Ipv6CidrBlock", "") for a in s.get("Ipv6CidrBlockAssociationSet", [])), "")
+        # A block being taken off (disassociating, disassociated) no longer counts.
+        ipv6 = next((a.get("Ipv6CidrBlock", "") for a in s.get("Ipv6CidrBlockAssociationSet", [])
+                     if a.get("Ipv6CidrBlockState", {}).get("State", "associated") == "associated"), "")
         mm.add_subnet(snap, s["SubnetId"], s["VpcId"], s.get("AvailabilityZone", ""),
                       s.get("CidrBlock", ""), name_tag(s.get("Tags")), ipv6,
                       s.get("MapPublicIpOnLaunch"), s.get("OwnerId", acct), region, _tags(s))
@@ -525,9 +527,11 @@ def _build_network(snap, ctx, region, d):
                                   "cidr": req.get("CidrBlock", "")},
                        {"account": acc.get("OwnerId", ""), "region": acc.get("Region", ""),
                         "cidr": acc.get("CidrBlock", "")}, name_tag(p.get("Tags")))
+    # CoreNetworkArn is a Cloud WAN route. Without it the route would be dropped, and a
+    # less specific one (like 0.0.0.0/0) would seem to carry that traffic instead.
     targets = ("GatewayId", "NatGatewayId", "TransitGatewayId", "VpcPeeringConnectionId",
                "EgressOnlyInternetGatewayId", "NetworkInterfaceId", "InstanceId",
-               "LocalGatewayId", "CarrierGatewayId")
+               "LocalGatewayId", "CarrierGatewayId", "CoreNetworkArn")
     for rt in d["route_tables"]:
         routes, holes = [], []
         for r in rt.get("Routes", []):

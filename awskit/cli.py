@@ -36,6 +36,15 @@ def stdin_has_data() -> bool:
         return False
 
 
+def read_text_file(path) -> str:
+    """A text file's text. Besides plain UTF-8 it takes a byte order mark, and UTF-16,
+    which is what Windows PowerShell 5.1 writes with > (aws ... > policy.json)."""
+    data = Path(path).read_bytes()
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+    return data.decode("utf-8-sig")
+
+
 def resolve_profiles(args) -> list:
     from . import profiles as prof
     if getattr(args, "all_profiles", False):
@@ -345,7 +354,8 @@ def systemd_dir() -> Path:
 
 
 def install_timer(at, args) -> int:
-    if not re.fullmatch(r"\d{1,2}:\d{2}", at or ""):
+    m = re.fullmatch(r"([0-9]{1,2}):([0-9]{2})", at or "")
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
         err("Give a time like 21:00.")
         return 1
     if sys.platform == "win32":
@@ -419,8 +429,14 @@ def cmd_audit(args) -> int:
     elif args.markdown:
         cols = AUDIT_COLS + [("fix", "Fix")]
         text = to_markdown(rows, cols, title="Exposure audit", intro=audit.counts_text(findings))
-        Path(args.markdown).write_text(text, encoding="utf-8")
-        print(f"Wrote {args.markdown}")
+        try:
+            Path(args.markdown).write_text(text, encoding="utf-8")
+            print(f"Wrote {args.markdown}")
+        except OSError as exc:
+            # Don't throw the scan away: print the report instead
+            err(f"Couldn't write {args.markdown}: {exc.strerror or exc}. Here's the report:")
+            print(text, end="")
+            return 1
     else:
         cols = AUDIT_COLS if len(profiles) > 1 else [c for c in AUDIT_COLS if c[0] != "profile"]
         if rows:
@@ -562,7 +578,7 @@ def cmd_policy(args) -> int:
             note = f"Loaded {label} from AWS."
         else:
             if args.file and args.file != "-":
-                text = Path(args.file).read_text(encoding="utf-8")
+                text = read_text_file(args.file)
             elif stdin_has_data() or args.file == "-":
                 text = sys.stdin.read()
             else:
@@ -1157,8 +1173,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv=None) -> int:
-    argv = sys.argv[1:] if argv is None else argv
+def run_command(argv) -> int:
     if not argv:
         return run_gui(None)
     if argv[0] == "redact":
@@ -1177,11 +1192,33 @@ def main(argv=None) -> int:
     if not getattr(args, "func", None):
         parser.print_help()
         return 0
+    return args.func(args) or 0
+
+
+def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    # Under pythonw (the Start menu shortcuts and the daily sweep's scheduled task on
+    # Windows) there's no stdout or stderr. They're None, and the first isatty() or err()
+    # stopped the run.
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
     try:
-        return args.func(args) or 0
+        code = run_command(argv)
+        sys.stdout.flush()      # so a closed pipe shows up here, not on the way out
+        return code
     except KeyboardInterrupt:
         print(file=sys.stderr)
         return 130
     except AuthError as exc:
         err(str(exc))
         return 1
+    except BrokenPipeError:
+        # What it printed to went away, like awskit trail --json | head. Python would
+        # print a traceback now and another one when it flushes stdout on the way out.
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+        except (OSError, ValueError, AttributeError):
+            pass
+        return 141

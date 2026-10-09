@@ -81,6 +81,7 @@ class MapCanvas(Gtk.DrawingArea):
         self.on_activate = on_activate
         self.pointer = None
         self.tiles = OrderedDict()       # (scene, zoom, scale, tx, ty) -> drawn tile
+        self.max_tiles = MAX_TILES       # more on a big screen, see _tile_limit
         self.tile_zoom = None            # the zoom the tiles on screen were drawn at
         self.prefetch_id = 0
         self.sharpen_id = 0
@@ -153,7 +154,11 @@ class MapCanvas(Gtk.DrawingArea):
         self.queue_draw()
 
     def invalidate(self):
+        """Draw everything again, icons too: the ones drawn while draw.io's icons were
+        still loading are the simple stand-ins."""
         self.tiles.clear()
+        if self.scene is not None:
+            self.scene.icon_cache.clear()
         self.queue_draw()
 
     def fit(self):
@@ -223,13 +228,20 @@ class MapCanvas(Gtk.DrawingArea):
         scene.render(c2, view=rect, scale=zoom * sf)
         surf.flush()
         self.tiles[(id(scene), zoom, sf, tx, ty)] = surf
-        while len(self.tiles) > MAX_TILES:
+        while len(self.tiles) > self.max_tiles:
             self.tiles.popitem(last=False)
         return surf
 
     def _tile_range(self, view, size, ring=0):
         return (int(math.floor(view[0] / size)) - ring, int(math.floor(view[1] / size)) - ring,
                 int(math.floor(view[2] / size)) + ring, int(math.floor(view[3] / size)) + ring)
+
+    def _tile_limit(self, size):
+        """How many tiles to keep: at least the window and the ring around it that
+        _prefetch draws. On a big screen, fewer would make each new tile push out one
+        that's still needed, and _prefetch would never stop drawing."""
+        x0, y0, x1, y1 = self._tile_range(self.visible(), size, ring=1)
+        return max(MAX_TILES, (x1 - x0 + 1) * (y1 - y0 + 1))
 
     def _prefetch(self):
         """Draws the tiles just outside the window while nothing else is happening, so a
@@ -240,6 +252,7 @@ class MapCanvas(Gtk.DrawingArea):
             return False
         sf = max(self.get_scale_factor(), 1)
         size = self._tile_size(self.zoom, sf)
+        self.max_tiles = self._tile_limit(size)
         x0, y0, x1, y1 = self._tile_range(self.visible(), size, ring=1)
         for ty in range(y0, y1 + 1):
             for tx in range(x0, x1 + 1):
@@ -276,6 +289,8 @@ class MapCanvas(Gtk.DrawingArea):
         stretching = self.tile_zoom != self.zoom
         z = self.tile_zoom
         size = self._tile_size(z, sf)
+        if not stretching:
+            self.max_tiles = self._tile_limit(size)
         x0, y0, x1, y1 = self._tile_range(self.visible(), size)
         k = self.zoom / (z * sf)
         for ty in range(y0, y1 + 1):
@@ -472,6 +487,7 @@ class MapPage(Page):
         self.matches = []
         self.match_index = -1
         self._last_query = ""
+        self._match_scene = None         # the scene the matches were found in
         self._detail_node = None
         self.cfg = dict(load_config().get("cloud_map") or {})
         self._restoring = False
@@ -562,6 +578,8 @@ class MapPage(Page):
         outer.set_position(250)
         self.append(outer)
         self.append(self.status)
+        # Closing AWS Kit with changes still in the built-in draw.io asks first.
+        win.connect("close-request", self.editing.close_request)
         GLib.timeout_add(300, self._tick)
         GLib.idle_add(self._restore)
 
@@ -1113,14 +1131,22 @@ class MapPage(Page):
     def load_snapshot(self, path, quiet=False, source=None):
         """source says how the file was made, for Rescan. None keeps the current one."""
         self.status.busy(f"Reading {Path(path).name}...", progress=False)
+        # Only the last file asked for counts, so a slow read (the last snapshot, opened
+        # at startup) can't replace one opened after it.
+        self._load_seq = getattr(self, "_load_seq", 0) + 1
+        seq = self._load_seq
 
         def done(snap):
+            if seq != self._load_seq:
+                return
             if source is not None or not self.source:
                 self.source = dict(source or {"kind": "file"})
             self.source["snapshot"] = str(path)
             self.set_snapshot(snap, path)
 
         def failed(exc):
+            if seq != self._load_seq:
+                return
             self.status.idle("")
             if quiet:
                 self.center.set_visible_child_name("empty")
@@ -1753,8 +1779,12 @@ class MapPage(Page):
         if not text or scene is None:
             self.matches, self.match_index = [], -1
             return
-        if not next_match or not self.matches or self._last_query != text:
+        # A new layout (another map type, filter or snapshot) has other boxes, so the
+        # matches are looked up again.
+        if not next_match or not self.matches or self._last_query != text or \
+                self._match_scene is not scene:
             self._last_query = text
+            self._match_scene = scene
             self.matches = []
             for b in scene.lay.boxes:
                 hay = [b.id, " ".join(b.title_lines), " ".join(b.caption_lines)]

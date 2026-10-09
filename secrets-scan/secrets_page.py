@@ -61,6 +61,10 @@ class SecretsPage(Page):
         self.result = None
         self.hook = {}
         self._hook_gen = 0
+        # One scan at a time. Picking another folder drops the running scan, and its result
+        # is ignored by its number, so an old folder's findings never show for a new one.
+        self.scanning = False
+        self._scan_gen = 0
 
         row1 = self.toolbar()
         row1.append(button("Folder", self.pick_folder, tooltip="Pick the repo or folder to scan"))
@@ -154,7 +158,7 @@ class SecretsPage(Page):
             self.folder_label.set_text("No folder picked yet")
             self.folder_label.set_tooltip_text(None)
             self.folder_label.add_css_class("dim-label")
-        self.scan_btn.set_sensitive(bool(self.folder))
+        self.scan_btn.set_sensitive(bool(self.folder) and not self.scanning)
 
     def pick_folder(self):
         open_file(self.win, self.set_folder, title="Pick a repo or folder to scan", folder=True)
@@ -162,6 +166,10 @@ class SecretsPage(Page):
     def set_folder(self, path, check_mode=True):
         if not path:
             return
+        if self.scanning:  # the old folder's scan is no use now
+            self.cancel.set()
+            self._scan_gen += 1
+            self.scanning = False
         self.folder = path
         self.save(folder=path)
         self.show_folder()
@@ -187,12 +195,17 @@ class SecretsPage(Page):
         self.save(block_account_ids=on)
         if not self.result:
             return
+        self.apply_block_ids()
+        self.fill_table()
+
+    def apply_block_ids(self):
+        """Account IDs block or warn the way the box says now."""
+        on = self.block_ids.get_active()
         for f in self.result.findings + self.result.allowed:
             if f.kind == "account_id":
                 f.level = "block" if on else "warn"
         self.result.findings.sort(key=lambda f: (secretscan.LEVEL_ORDER[f.level], f.path,
                                                  f.line, f.commit))
-        self.fill_table()
 
     # ---- the commit hook
     def refresh_hook(self, switch_mode=False):
@@ -264,7 +277,10 @@ class SecretsPage(Page):
         self.hook_btn.set_sensitive(False)
 
         def done(message):
-            self.status.idle(message)
+            if self.scanning:  # leave the status bar alone so Stop still stops the scan
+                self.detail.set_text(message)
+            else:
+                self.status.idle(message)
             if not secretscan.find_awskit_on_path() and self.hook.get("state") != "on":
                 show_message(self.win, "awskit isn't on your PATH",
                              "The hook runs awskit secrets, so until awskit is on PATH it "
@@ -283,6 +299,8 @@ class SecretsPage(Page):
 
     # ---- scanning
     def run(self):
+        if self.scanning:
+            return
         if not self.folder:
             self.pick_folder()
             return
@@ -291,16 +309,30 @@ class SecretsPage(Page):
         block = self.block_ids.get_active()
         self.save(mode=mode, history_commits=history)
         cancel = self.new_cancel()
+        self.scanning = True
+        self._scan_gen += 1
+        gen = self._scan_gen
         self.scan_btn.set_sensitive(False)
         self.allow_btn.set_sensitive(False)
         self.status.busy(f"Scanning {MODES[mode].lower()}...", cancel)
-        progress = on_main(self.status.progress)
+        progress = on_main(lambda *args: gen == self._scan_gen and self.status.progress(*args))
+
+        def done(result):
+            if gen == self._scan_gen:
+                self.done(result)
+
+        def failed(exc):
+            if gen == self._scan_gen:
+                self.failed(exc)
         run_bg(lambda: secretscan.scan(folder, mode, history, block, progress=progress,
-                                       cancel=cancel), self.done, self.failed)
+                                       cancel=cancel), done, failed)
 
     def done(self, result):
+        self.scanning = False
         self.result = result
         self.scan_btn.set_sensitive(True)
+        # The box may have been ticked or unticked while the scan ran
+        self.apply_block_ids()
         self.fill_table()
         notes = list(result.notes)
         self.status.idle(result.summary() + (f" {len(notes)} note(s) below." if notes and
@@ -309,6 +341,7 @@ class SecretsPage(Page):
         self.refresh_hook()
 
     def failed(self, exc):
+        self.scanning = False
         self.scan_btn.set_sensitive(True)
         self.status.idle("")
         show_message(self.win, "Couldn't scan", str(exc) if isinstance(exc, ScanError)

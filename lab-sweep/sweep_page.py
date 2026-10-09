@@ -49,6 +49,10 @@ class SweepPage(Page):
                          "Delete, and type delete.")
         self.items = []
         self.warnings = []
+        # What teardown did to each item since the scan, by id(item): deleted or failed.
+        # Redrawing the table (Keep ticked, Settings) keeps it, so a deleted row can't come
+        # back as one that can be ticked and deleted again.
+        self.outcomes = {}
         # "scan", "teardown" or "spend" while one runs. Only one at a time, so a scan can't
         # take over the status bar's Stop button from a teardown, or start a second one.
         self.job = None
@@ -131,24 +135,42 @@ class SweepPage(Page):
 
     def scan_done(self, result):
         self.items, self.warnings = result
+        self.outcomes = {}
         self.set_job(None)
         self.show_items()
         stopped = " (stopped early)" if self.cancel.is_set() else ""
         self.status.idle(f"Scan finished{stopped} at {datetime.now():%H:%M}.")
-        if self.warnings:
-            self.detail.set_text("Notes from the scan:\n\n" + "\n".join(self.warnings))
+        # The last scan's notes, or nothing: old ones would say a check failed when it didn't
+        self.detail.set_text("Notes from the scan:\n\n" + "\n".join(self.warnings)
+                             if self.warnings else "")
+
+    def item_row(self, it) -> dict:
+        r = it.row()
+        done = self.outcomes.get(id(it))
+        if done and not it.kept:
+            r["action"] = done
+        r["_dim"] = it.kept or not it.can_delete or done == "deleted"
+        return r
 
     def show_items(self):
         rows = []
         for it in self.items:
-            r = it.row()
+            r = self.item_row(it)
             r["age_days"] = age_days(it.created)
-            r["_dim"] = it.kept or not it.can_delete
             rows.append(r)
-        self.table.set_rows(rows, self.items, [it.can_delete and not it.kept for it in self.items])
+        self.table.set_rows(rows, self.items,
+                            [it.can_delete and not it.kept and
+                             self.outcomes.get(id(it)) != "deleted" for it in self.items])
+        # Notes are checks that couldn't run (sign-in expired, no permission, no connection),
+        # so with nothing else found the scan mustn't look clean
         if not self.items:
-            self.table.clear("Nothing found that costs money. Nice and clean.")
-        self.summary.set_text(sweep.summary_line(self.items))
+            self.table.clear("Nothing found, but some checks couldn't run. See the notes "
+                             "below." if self.warnings else
+                             "Nothing found that costs money. Nice and clean.")
+        if self.warnings and all(it.kept for it in self.items):
+            self.summary.set_text("Nothing found, but some checks couldn't run.")
+        else:
+            self.summary.set_text(sweep.summary_line(self.items))
         self.update_selection()
 
     def keep_rules_changed(self):
@@ -263,6 +285,9 @@ class SweepPage(Page):
         for it, success, msg in results:
             log.append(f"{'ok  ' if success else 'FAIL'} {it.kind_label:<28} {it.id}: {msg}")
         outcome = {id(it): success for it, success, _ in results}
+        for it, success, _ in results:
+            if not it.kept:
+                self.outcomes[id(it)] = "deleted" if success else "failed"
         for row in self.table.items():
             if id(row.obj) in outcome:
                 success = outcome[id(row.obj)]
@@ -342,10 +367,8 @@ class SweepPage(Page):
         if not self.items:
             show_message(self.win, "Nothing to export yet", "Run a scan first.")
             return
-        rows = []
-        for it in self.items:
-            r = it.row()
-            rows.append(r)
+        rows = [{k: v for k, v in self.item_row(it).items() if not k.startswith("_")}
+                for it in self.items]
         export_rows(self.win, rows, self.EXPORT_COLS, "lab-sweep.md", title="Lab sweep")
 
     def settings(self):

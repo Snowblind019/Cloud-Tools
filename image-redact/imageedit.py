@@ -33,7 +33,7 @@ TOOLS = [
 ]
 
 SHORTCUTS_HELP = ("V C R O L A P T pick tools. Ctrl+S saves, Ctrl+C copies, F2 renames, Ctrl+M "
-                  "moves. The wheel zooms, Shift+wheel scrolls, middle-drag pans.")
+                  "moves. Ctrl+wheel zooms, Shift+wheel scrolls sideways, middle-drag pans.")
 
 # Shown when Save or Copy is tried while text detection is still running.
 BUSY = ("Text detection is still running. Save and Copy work again once it's done, so "
@@ -187,7 +187,8 @@ class Editor:
         color, radius = self.cfg["box_color"], self.cfg["corners"]
         new = [ir.cover_shape(b, color, auto=True, radius=radius) for b in boxes]
         old = [s for s in self.shapes if s.get("auto")]
-        if old or new:
+        # Finding the same boxes again changes nothing, so it doesn't take an undo step.
+        if old != new:
             self.checkpoint()
             # Detected boxes go underneath, so arrows and text you add stay on top.
             self.shapes = new + [s for s in self.shapes if not s.get("auto")]
@@ -244,14 +245,12 @@ class Editor:
                 if self.selected["kind"] in ("cover", "rect", "oval"):
                     x1, y1, x2, y2 = ir.rect_of(self.selected)
                     self.selected.update(x1=x1, y1=y1, x2=x2, y2=y2)
-                self.drag.update(mode="resize", handle=handle, before=copy.deepcopy(self.shapes),
-                                 orig=copy.deepcopy(self.selected))
+                self.drag.update(mode="resize", handle=handle, orig=copy.deepcopy(self.selected))
                 return
             shape = self.shape_at(ix, iy, 5 / zoom)
             self.selected = shape
             if shape is not None:
-                self.drag.update(mode="move", before=copy.deepcopy(self.shapes),
-                                 orig=copy.deepcopy(shape))
+                self.drag.update(mode="move", orig=copy.deepcopy(shape))
             return
         if tool == "text":
             self.drag["mode"] = "text"
@@ -339,7 +338,11 @@ class Editor:
                 self.unsaved = True
             return None
         if d["moved"] and self.selected is not None:
-            self.undo_stack.append(d["before"])
+            # Undo puts back the shape as it was before the drag. The rest is copied now
+            # rather than when the mouse went down, since text detection can finish in
+            # between, and undoing the drag shouldn't take its boxes away too.
+            self.undo_stack.append([copy.deepcopy(d["orig"] if s is self.selected else s)
+                                    for s in self.shapes])
             del self.undo_stack[:-100]
             self.redo_stack.clear()
             self.selected.pop("auto", None)
@@ -360,6 +363,12 @@ class Editor:
         return True
 
     def escape(self):
+        """Esc drops the shape being drawn, puts a shape being moved or resized back where
+        it was, and clears the selection."""
+        d = self.drag
+        if d and d.get("mode") in ("move", "resize") and self.selected is not None:
+            self.selected.clear()
+            self.selected.update(copy.deepcopy(d["orig"]))
         self.drag = self.draft = self.selected = None
 
     def commit_text(self, request, text):

@@ -100,7 +100,7 @@ These are management events, so they're all in Event history. An organization tr
 2. Pick a time window, from **Last 15 minutes** to **Last 90 days**.
 3. Pick **Regions**. It starts on your profile's region plus us-east-1.
 4. Tick **Errors only**, **Hide reads** or **Security events** if you want.
-5. Press **Search**, or Enter in the value box.
+5. Press **Search**, or Enter in the value box. One search runs at a time.
 
 It shows up to 1,000 events, newest first. The filter box above the table narrows the results further without asking AWS again.
 

@@ -341,6 +341,16 @@ _S3 = {
     "PutObjectLockConfiguration": ["PutBucketObjectLockConfiguration"],
 }
 ACTION_MAP = {("s3", k): v for k, v in _S3.items()}
+# A call for one version of an object (it has a versionId) needs the Version action
+# instead: GetObject with a versionId is s3:GetObjectVersion, and s3:GetObject doesn't
+# allow it.
+S3_VERSION_ACTIONS = {
+    "GetObject": "GetObjectVersion", "DeleteObject": "DeleteObjectVersion",
+    "GetObjectAcl": "GetObjectVersionAcl", "PutObjectAcl": "PutObjectVersionAcl",
+    "GetObjectTagging": "GetObjectVersionTagging", "PutObjectTagging": "PutObjectVersionTagging",
+    "DeleteObjectTagging": "DeleteObjectVersionTagging",
+    "GetObjectAttributes": "GetObjectVersionAttributes",
+}
 ACTION_MAP.update({
     ("lambda", "Invoke"): ["InvokeFunction"],
     ("lambda", "InvokeWithResponseStream"): ["InvokeFunction"],
@@ -623,9 +633,15 @@ def _secretsmanager(action, rp, detail, w):
 
 
 def parameter_arn(name: str, w: Where) -> str:
+    """A parameter's ARN. A version or label after the name (NAME:3, NAME:prod) picks which
+    value to read, but isn't part of the ARN IAM checks, so it's left off. Parameter names
+    can't hold a colon."""
     if name.startswith("arn:"):
-        return literal(name) if ":ssm:" in name and ":parameter/" in name else ""
-    return w.arn("ssm", "parameter/" + literal(name.lstrip("/")))
+        if ":ssm:" not in name or ":parameter/" not in name:
+            return ""
+        head, _, rest = name.partition(":parameter/")
+        return literal(f"{head}:parameter/{rest.split(':', 1)[0]}")
+    return w.arn("ssm", "parameter/" + literal(name.split(":", 1)[0].lstrip("/")))
 
 
 def ssm_document_arn(name: str, w: Where) -> str:
@@ -992,13 +1008,18 @@ def map_event(detail: dict, principal: Principal | None = None) -> Mapped:
                       prefix=prefix, event=name)
     w = where_of(detail, principal)
     uses = []
-    for action in ACTION_MAP.get((prefix, event), [event]):
+    actions = ACTION_MAP.get((prefix, event), [event])
+    if prefix == "s3" and _str(_params(detail).get("versionId")):
+        actions = [S3_VERSION_ACTIONS.get(a, a) for a in actions]
+    for action in actions:
         uses.append((f"{prefix}:{action}", resources_for(prefix, action, detail, w)))
     if (prefix, event) == ("s3", "CopyObject") or (prefix, event) == ("s3", "UploadPartCopy"):
-        src = unquote(_str(_params(detail).get("x-amz-copy-source"))).lstrip("/")
+        # bucket/key, or bucket/key?versionId=... to copy one version of the source.
+        raw, _, query = _str(_params(detail).get("x-amz-copy-source")).partition("?")
+        src = unquote(raw).lstrip("/")
         bucket = literal(src.split("/", 1)[0]) if "/" in src else ""
-        uses.append(("s3:GetObject", {f"arn:{w.partition}:s3:::{bucket}/*"} if bucket
-                     else set(ANY)))
+        read = "s3:GetObjectVersion" if "versionId=" in query else "s3:GetObject"
+        uses.append((read, {f"arn:{w.partition}:s3:::{bucket}/*"} if bucket else set(ANY)))
     return Mapped("ok", uses=uses, implied=implied_for(prefix, event, detail, w),
                   prefix=prefix, event=event)
 
@@ -1427,6 +1448,14 @@ def read_capped(path: Path, limit=None) -> bytes:
 FILE_SUFFIXES = (".json", ".json.gz", ".gz")
 
 
+def decode_text(data: bytes) -> str:
+    """A file's text. Windows PowerShell 5 writes UTF-16 with a byte order mark when output
+    goes to a file with >, like aws cloudtrail lookup-events > events.json."""
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16")
+    return data.decode("utf-8-sig")
+
+
 def expand_paths(paths, info: ReadInfo) -> list:
     """Files to read, in a stable order. Folders are walked, keeping .json, .json.gz and .gz
     files. Inside a folder, links (to files or folders) aren't followed and anything that
@@ -1535,7 +1564,7 @@ def iter_file_events(paths, info: ReadInfo, keep=None, cancel=None):
             continue
         budget.used += len(data)
         try:
-            obj = json.loads(data.decode("utf-8-sig"))
+            obj = json.loads(decode_text(data))
         except UnicodeDecodeError:
             info.notes.append(f"{label} isn't UTF-8 text. Skipped.")
             continue
@@ -1974,7 +2003,7 @@ def build_policy(uses, specific=True) -> tuple:
         if passed_to:
             st["Condition"] = {"StringEquals": {"iam:PassedToService": passed_to}}
         out.append(st)
-        meta.append({"sid": sid, "origin": group, "actions": actions})
+        meta.append({"sid": sid, "origin": group, "actions": actions, "passed_to": passed_to})
     return {"Version": "2012-10-17", "Statement": out}, meta, collapsed_notes
 
 
@@ -2345,8 +2374,8 @@ class Result:
                 "last_sort": u.last.isoformat() if u.last else "",
                 "result": "Denied" if u.origin == "denied" else (
                     "OK" if u.origin == "events" else ""),
-                "source": source, "origin": u.origin, "in_draft": included,
-                "message": u.message, "_dim": not included}
+                "source": source, "origin": u.origin, "passed_to": u.passed_to,
+                "in_draft": included, "message": u.message, "_dim": not included}
 
     def rows(self) -> list:
         return [self.use_row(u) for u in self.all_uses()]

@@ -425,10 +425,12 @@ class TkEditor:
                  "plus": lambda: self.step_zoom(1), "minus": lambda: self.step_zoom(-1),
                  "KP_Add": lambda: self.step_zoom(1), "KP_Subtract": lambda: self.step_zoom(-1)}
         for key, fn in pairs.items():
-            r.bind(f"<Control-{key}>", self._guard(fn))
+            # Ctrl+Shift+Z redoes. Whether Z comes as a capital depends on Caps Lock too, so
+            # it goes by Shift instead, and Ctrl+Z with Caps Lock on still undoes.
+            handler = self._guard(fn, shifted=self.redo if key == "z" else None)
+            r.bind(f"<Control-{key}>", handler)
             if len(key) == 1 and key.isalpha():
-                upper = self.redo if key == "z" else fn  # Ctrl+Shift+Z redoes
-                r.bind(f"<Control-{key.upper()}>", self._guard(upper))
+                r.bind(f"<Control-{key.upper()}>", handler)
         r.bind("<F2>", lambda e: self.focus_name())
         r.bind("<KeyPress>", self._key)
 
@@ -439,11 +441,15 @@ class TkEditor:
             return False
         return isinstance(w, (tk.Entry, ttk.Entry, tk.Text, ttk.Spinbox, tk.Spinbox))
 
-    def _guard(self, fn):
-        def handler(_e):
+    def _guard(self, fn, shifted=None):
+        def handler(e):
             if self._typing():
                 return None
-            fn()
+            state = getattr(e, "state", 0)
+            if shifted is not None and isinstance(state, int) and state & 0x0001:
+                shifted()
+            else:
+                fn()
             return "break"
         return handler
 
@@ -469,13 +475,20 @@ class TkEditor:
         threading.Thread(target=target, daemon=True).start()
 
     def _poll(self):
+        # One failed callback mustn't stop the loop, or Open, Paste and text detection
+        # would never finish again.
         try:
             while True:
-                fn, value = self.jobs.get_nowait()
-                fn(value)
-        except queue.Empty:
-            pass
-        self.root.after(50, self._poll)
+                try:
+                    fn, value = self.jobs.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    fn(value)
+                except Exception:
+                    self._report_error(*sys.exc_info())
+        finally:
+            self.root.after(50, self._poll)
 
     def _report_error(self, exc, value, tb):
         text = "".join(traceback.format_exception(exc, value, tb))
@@ -607,19 +620,18 @@ class TkEditor:
         self.set_zoom(ie.step_zoom(self.zoom, direction), anchor)
 
     def _wheel(self, event, delta=None):
-        """The wheel zooms toward the pointer, with or without Ctrl. Shift+wheel scrolls up
-        and down, Ctrl+Shift+wheel sideways."""
+        """The wheel scrolls up and down, Shift+wheel left and right (a tilting wheel comes
+        in the same way on Windows), and Ctrl+wheel zooms toward the pointer."""
         delta = delta if delta is not None else event.delta
         if self.ed.surface is None or not delta:
             return
         ctrl, shift = event.state & 0x0004, event.state & 0x0001
-        if shift:
+        if not ctrl:
             step = -60 * (delta / 120)
-            if ctrl:
+            if shift:
                 self.sx += step
             else:
                 self.sy += step
-            self.fit = False
             self.render()
             return
         # 120 is one notch. Precision touchpads and smooth wheels send smaller parts, which
@@ -823,8 +835,7 @@ class TkEditor:
     def _redact_settings_saved(self):
         # While the text is being read again, the new settings apply when that's done.
         if self.ed.passes is not None and not self.ed.finding:
-            self.set_status(self.ed.apply_passes())
-            self.refresh()
+            self._apply_boxes()
 
     # ================================================================== undo
     def undo(self):
@@ -865,18 +876,36 @@ class TkEditor:
         if path:
             self.open_path(path, confirmed=True)
 
+    def _latest(self):
+        """Wraps one open or paste's callbacks. Starting another open or paste makes the
+        older one's result count for nothing, so a slow open that finishes after a paste
+        can't replace the pasted image without asking."""
+        self._load_seq = getattr(self, "_load_seq", 0) + 1
+        seq = self._load_seq
+
+        def wrap(fn):
+            def call(*args):
+                if seq == self._load_seq:
+                    return fn(*args)
+                return None
+            return call
+        return wrap
+
     def open_path(self, path, confirmed=False):
         if not confirmed and not self.confirm_discard():
             return
+        latest = self._latest()
         self.set_status(f"Opening {os.path.basename(path)}...", busy=True)
-        self.run_bg(lambda: ir.load_image_bytes(path), lambda png: self.load_png(png, path),
-                    lambda exc: self.set_status(str(exc)))
+        self.run_bg(lambda: ir.load_image_bytes(path),
+                    latest(lambda png: self.load_png(png, path)),
+                    latest(lambda exc: self.set_status(str(exc))))
 
     def paste(self):
         if not self.confirm_discard():
             return
+        latest = self._latest()
         self.set_status("Reading the clipboard...", busy=True)
-        self.run_bg(read_clipboard_image, self._pasted, self._paste_failed)
+        self.run_bg(read_clipboard_image, latest(self._pasted), latest(self._paste_failed))
 
     def _pasted(self, png):
         if png:
@@ -911,21 +940,32 @@ class TkEditor:
         if ed.png is None or not self.ocr_ok or ed.finding:
             return
         if ed.passes is not None and not ed.ocr_warning:
-            self.set_status(ed.apply_passes())
-            self.refresh()
+            self._apply_boxes()
             return
         png, lang = ed.png, ed.cfg["language"]
         gen = ed.start_finding()
         self._update_state()
         self.set_status("Reading the text in the image...", busy=True)
 
-        def finished(msg):
+        def finished(apply):
+            selected = ed.selected
+            msg = apply()
             if msg is not None:
                 self.set_status(msg)
+                if ed.selected is not selected:
+                    # A detected box that was selected is gone, so its controls go too.
+                    self._sync_style_controls()
                 self.refresh()
         self.run_bg(lambda: ir.read_text(png, lang),
-                    lambda passes: finished(ed.found(gen, passes)),
-                    lambda exc: finished(ed.find_failed(gen, exc)))
+                    lambda passes: finished(lambda: ed.found(gen, passes)),
+                    lambda exc: finished(lambda: ed.find_failed(gen, exc)))
+
+    def _apply_boxes(self):
+        selected = self.ed.selected
+        self.set_status(self.ed.apply_passes())
+        if self.ed.selected is not selected:
+            self._sync_style_controls()
+        self.refresh()
 
     # ================================================================== files
     def _update_folder_button(self):

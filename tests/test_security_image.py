@@ -264,6 +264,70 @@ class TkLogTests(Folder):
         self.assertIn("Something went wrong", win.statuses[-1][0])
 
 
+class TkShortcutTests(unittest.TestCase):
+    def test_ctrl_z_undoes_with_caps_lock_on(self):
+        """Caps Lock makes Tk send a capital Z, which used to redo. Only Shift redoes."""
+        image_tk = import_image_tk()
+        calls = []
+
+        class Root:
+            def __init__(self):
+                self.bound = {}
+
+            def bind(self, sequence, handler):
+                self.bound[sequence] = handler
+        win = types.SimpleNamespace(root=Root(), _typing=lambda: False)
+        for name in ("open_dialog", "paste", "save", "copy", "find_pii", "undo", "redo",
+                     "post_folder_menu", "zoom_fit", "step_zoom", "focus_name", "_key"):
+            setattr(win, name, lambda *_a, name=name: calls.append(name))
+        win._guard = types.MethodType(image_tk.TkEditor._guard, win)
+        image_tk.TkEditor._bind_keys(win)
+        shift, lock = 0x0001, 0x0002
+        for sequence, state, want in (("<Control-z>", 0, "undo"), ("<Control-Z>", lock, "undo"),
+                                      ("<Control-Z>", shift, "redo"),
+                                      ("<Control-z>", shift | lock, "redo"),
+                                      ("<Control-y>", 0, "redo"), ("<Control-S>", lock, "save")):
+            calls.clear()
+            handler = win.root.bound[sequence]
+            self.assertEqual(handler(types.SimpleNamespace(state=state)), "break")
+            self.assertEqual(calls, [want], (sequence, state))
+
+    def test_a_failed_callback_keeps_the_job_loop_going(self):
+        """If one background job's callback raised, the loop stopped for good, and Open,
+        Paste and text detection never finished after that."""
+        import queue
+        image_tk = import_image_tk()
+        later, done, errors = [], [], []
+        win = types.SimpleNamespace(jobs=queue.Queue(),
+                                    root=types.SimpleNamespace(after=lambda ms, fn: later.append(fn)),
+                                    _report_error=lambda *exc: errors.append(exc[1]),
+                                    _poll=lambda: None)
+
+        def broken(value):
+            raise ValueError(value)
+        win.jobs.put((broken, "first"))
+        win.jobs.put((done.append, "second"))
+        image_tk.TkEditor._poll(win)
+        self.assertEqual(done, ["second"])
+        self.assertEqual([str(e) for e in errors], ["first"])
+        self.assertEqual(len(later), 1)
+
+    def test_only_the_last_open_or_paste_counts(self):
+        """A slow open that finished after a paste replaced the pasted image."""
+        image_tk = import_image_tk()
+        jobs, loaded = [], []
+        win = types.SimpleNamespace(confirm_discard=lambda: True, set_status=lambda *a, **k: None,
+                                    run_bg=lambda work, done, failed=None: jobs.append(done),
+                                    load_png=lambda png, path: loaded.append(path))
+        for name in ("_latest", "open_path", "paste", "_pasted", "_paste_failed"):
+            setattr(win, name, types.MethodType(getattr(image_tk.TkEditor, name), win))
+        win.open_path("slow.png")
+        win.paste()
+        jobs[1](b"pasted")                 # the paste comes back first
+        jobs[0](b"slow")                   # then the open asked for before it
+        self.assertEqual(loaded, [None])
+
+
 # =================================================================== 2, 8: opening files
 
 class FakePillow:

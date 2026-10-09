@@ -123,9 +123,13 @@ def _run(cmd, cwd, timeout=900, profile=None):
     group, so if it times out the provider plugins Terraform started are stopped with it."""
     group = os.name != "nt"
     try:
+        # Terraform prints UTF-8 everywhere. Decoding with the locale's encoding (cp1252 on
+        # most Windows PCs) garbles names and breaks on some characters. CREATE_NO_WINDOW
+        # keeps a console window from opening for it when the window runs under pythonw.
         proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, env=_env(profile),
-                                start_new_session=group)
+                                stderr=subprocess.PIPE, encoding="utf-8", errors="replace",
+                                env=_env(profile), start_new_session=group,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except OSError as exc:
         raise PlanError(str(exc)) from exc
     try:
@@ -222,12 +226,17 @@ def plan_directory(directory: str, extra_args=None, log=None, profile=None) -> d
 def load_plan(source: str, profile=None, run_terraform=True) -> dict:
     """source can be JSON text, a .json file, a saved binary plan, or a Terraform folder.
     With run_terraform=False, a saved plan or a folder raises NeedsTerraform instead."""
-    text = (source or "").strip()
+    text = (source or "").lstrip("\ufeff").strip()   # a byte order mark from a Windows file
     if text.startswith("{"):
         try:
             return json.loads(text)
         except (ValueError, RecursionError) as exc:
             raise PlanError(f"That isn't valid plan JSON: {exc}") from exc
+    if "\n" in text or "\r" in text or len(text) > 4096:
+        # Text piped in, like terraform plan's own output. It's no path, and it's not
+        # repeated in the message: a plan can hold secrets.
+        raise PlanError("That isn't plan JSON. Give the output of terraform show -json, a saved "
+                        "plan file or a Terraform folder.")
     path = Path(os.path.expanduser(text))
     try:
         is_dir = path.is_dir()
@@ -240,9 +249,15 @@ def load_plan(source: str, profile=None, run_terraform=True) -> dict:
                                  "plan there.")
         return plan_directory(str(path), profile=profile)
     if data is not None:
-        if data.lstrip()[:1] == b"{":
+        try:
+            # UTF-8, or UTF-8 or UTF-16 with a byte order mark, which is what Windows
+            # PowerShell 5.1 writes for terraform show -json tfplan > plan.json
+            json_text = iampolicy.json_text(data)
+        except UnicodeDecodeError as exc:
+            raise PlanError(f"{path.name} isn't valid JSON: {exc}") from exc
+        if json_text is not None:
             try:
-                return json.loads(data.decode("utf-8"))
+                return json.loads(json_text)
             except (ValueError, RecursionError) as exc:
                 raise PlanError(f"{path.name} isn't valid JSON: {exc}") from exc
         if not run_terraform:
